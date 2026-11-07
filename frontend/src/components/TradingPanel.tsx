@@ -9,6 +9,7 @@ import type { LivelinePoint, LivelineSeries } from 'liveline'
 import {
   AlertTriangle,
   BarChart3,
+  Bot,
   Brain,
   CheckCircle2,
   ChevronRight,
@@ -17,6 +18,7 @@ import {
   Loader2,
   PieChart,
   Play,
+  Plus,
   Settings,
   ShieldAlert,
   Sparkles,
@@ -10816,7 +10818,31 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
                           <ScrollArea className="h-[280px] xl:h-full">
                             <div className="space-y-1.5 p-2">
                               {allBotsLeaderboardWithTrend.length === 0 ? (
-                                <p className="py-8 text-center text-[11px] text-muted-foreground">{t('tradingPanel.allBots.noBotData')}</p>
+                                traders.length === 0 ? (
+                                  <div className="px-2 py-6 text-center space-y-2.5">
+                                    <div className="mx-auto flex h-9 w-9 items-center justify-center rounded-full bg-cyan-500/10">
+                                      <Bot className="h-4 w-4 text-cyan-400" />
+                                    </div>
+                                    <div className="space-y-1">
+                                      <p className="text-[12px] font-medium leading-tight text-foreground">
+                                        {t('botRosterPanel.emptyTitle')}
+                                      </p>
+                                      <p className="mx-auto max-w-[240px] text-[11px] leading-snug text-muted-foreground">
+                                        {t('botRosterPanel.emptyDescription')}
+                                      </p>
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      className="h-7 bg-cyan-500 text-[11px] text-white hover:bg-cyan-600"
+                                      onClick={openCreateTraderFlyout}
+                                    >
+                                      <Plus className="mr-1 h-3.5 w-3.5" />
+                                      {t('botRosterPanel.emptyCreateButton')}
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <p className="py-8 text-center text-[11px] text-muted-foreground">{t('tradingPanel.allBots.noBotData')}</p>
+                                )
                               ) : (
                                 allBotsLeaderboardWithTrend.map((row) => {
                                   const traderStatus = resolveTraderStatusPresentation(row.trader, orchestratorRunning)
