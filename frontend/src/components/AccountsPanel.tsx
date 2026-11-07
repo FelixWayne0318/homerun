@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useAtom } from 'jotai'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
   Activity,
@@ -10,6 +10,7 @@ import {
   DollarSign,
   LayoutDashboard,
   ListChecks,
+  Plus,
   Receipt,
   RefreshCw,
   Shield,
@@ -24,8 +25,12 @@ import { accountModeAtom, selectedAccountIdAtom } from '../store/atoms'
 import { Card, CardContent } from './ui/card'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog'
+import { Input } from './ui/input'
+import { Label } from './ui/label'
 import { ScrollArea } from './ui/scroll-area'
 import {
+  createSimulationAccount,
   getAccountPositions,
   getAccountTrades,
   getAllTraderOrders,
@@ -142,6 +147,71 @@ export default function AccountsPanel({ onOpenSettings }: AccountsPanelProps) {
     queryFn: getSimulationAccounts,
     refetchInterval: 10000,
   })
+
+  // ---- Create sandbox (shadow) account ----
+  const queryClient = useQueryClient()
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [accountDraft, setAccountDraft] = useState({
+    name: '',
+    initial_capital: '10000',
+    max_position_pct: '10',
+    max_positions: '10',
+  })
+
+  const createAccountMutation = useMutation({
+    mutationFn: (payload: { name: string; initial_capital: number; max_position_pct: number; max_positions: number }) =>
+      createSimulationAccount(payload),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ['simulation-accounts'] })
+      if (result?.account_id) {
+        setSelectedAccountId(result.account_id)
+        setAccountMode('sandbox')
+        setWorkspaceTab('sandbox')
+      }
+      setCreateDialogOpen(false)
+      setCreateError(null)
+      setAccountDraft({ name: '', initial_capital: '10000', max_position_pct: '10', max_positions: '10' })
+    },
+    onError: (error: unknown) => {
+      const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+      setCreateError(
+        typeof detail === 'string' && detail.trim().length > 0
+          ? detail
+          : t('accounts.createSandboxError', { defaultValue: '创建失败，请检查后端服务后重试' })
+      )
+    },
+  })
+
+  const submitCreateAccount = () => {
+    const name = accountDraft.name.trim()
+    if (!name) {
+      setCreateError(t('accounts.createSandboxNameRequired', { defaultValue: '请填写账户名称' }))
+      return
+    }
+    const initialCapital = Number(accountDraft.initial_capital)
+    const maxPositionPct = Number(accountDraft.max_position_pct)
+    const maxPositions = Number(accountDraft.max_positions)
+    if (!Number.isFinite(initialCapital) || initialCapital < 100 || initialCapital > 10000000) {
+      setCreateError(t('accounts.createSandboxCapitalInvalid', { defaultValue: '初始资金需在 100 – 10,000,000 之间' }))
+      return
+    }
+    if (!Number.isFinite(maxPositionPct) || maxPositionPct < 1 || maxPositionPct > 100) {
+      setCreateError(t('accounts.createSandboxPositionPctInvalid', { defaultValue: '单仓上限需在 1% – 100% 之间' }))
+      return
+    }
+    if (!Number.isInteger(maxPositions) || maxPositions < 1 || maxPositions > 100) {
+      setCreateError(t('accounts.createSandboxMaxPositionsInvalid', { defaultValue: '最大持仓数需为 1 – 100 的整数' }))
+      return
+    }
+    setCreateError(null)
+    createAccountMutation.mutate({
+      name,
+      initial_capital: initialCapital,
+      max_position_pct: maxPositionPct,
+      max_positions: maxPositions,
+    })
+  }
 
   const { data: tradingStatus } = useQuery({
     queryKey: ['trading-status'],
@@ -793,6 +863,19 @@ export default function AccountsPanel({ onOpenSettings }: AccountsPanelProps) {
                   <div className="px-4 py-8 text-center">
                     <Shield className="mx-auto mb-2 h-6 w-6 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">{t('accounts.noSandboxAccountsYet')}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setCreateError(null)
+                        setWorkspaceTab('sandbox')
+                        setCreateDialogOpen(true)
+                      }}
+                      className="mt-3 h-7 gap-1.5 border-amber-500/40 text-[11px] text-amber-300 hover:bg-amber-500/20 hover:text-amber-200"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      {t('accounts.createSandboxAccountCta', { defaultValue: '新建沙盒账户' })}
+                    </Button>
                   </div>
                 ) : (
                   <div className="min-h-0 flex-1 overflow-auto">
@@ -990,13 +1073,41 @@ export default function AccountsPanel({ onOpenSettings }: AccountsPanelProps) {
         <div className="flex-1 min-h-0 grid gap-2 xl:grid-cols-[250px_minmax(0,1fr)]">
           <div className="hidden xl:flex min-h-0 flex-col rounded-lg border border-border/70 bg-card overflow-hidden">
             <div className="shrink-0 border-b border-border/50 px-2.5 py-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('accounts.sandboxAccounts')}</p>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{t('accounts.sandboxAccounts')}</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setCreateError(null)
+                    setCreateDialogOpen(true)
+                  }}
+                  className="h-6 gap-1 border-amber-500/40 px-1.5 text-[10px] text-amber-300 hover:bg-amber-500/20 hover:text-amber-200"
+                >
+                  <Plus className="h-3 w-3" />
+                  {t('accounts.createSandboxAccount', { defaultValue: '新建' })}
+                </Button>
+              </div>
               <p className="text-[10px] text-muted-foreground">{t('accounts.desksConfigured', { n: sandboxAccounts.length })}</p>
             </div>
             <ScrollArea className="flex-1 min-h-0">
               <div className="space-y-1.5 p-1.5">
                 {sandboxAccounts.length === 0 ? (
-                  <p className="px-2 py-6 text-center text-[11px] text-muted-foreground">{t('accounts.noSandboxConfigured')}</p>
+                  <div className="px-2 py-6 text-center">
+                    <p className="text-[11px] text-muted-foreground">{t('accounts.noSandboxConfigured')}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setCreateError(null)
+                        setCreateDialogOpen(true)
+                      }}
+                      className="mt-2 h-7 gap-1.5 border-amber-500/40 text-[11px] text-amber-300 hover:bg-amber-500/20 hover:text-amber-200"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      {t('accounts.createSandboxAccount', { defaultValue: '新建沙盒账户' })}
+                    </Button>
+                  </div>
                 ) : (
                   sandboxAccounts.map((account) => {
                     const isActive = activeSandboxAccountId === account.id
@@ -1321,6 +1432,90 @@ export default function AccountsPanel({ onOpenSettings }: AccountsPanelProps) {
               </div>
             )}
           </div>
+          <Dialog
+            open={createDialogOpen}
+            onOpenChange={(open) => {
+              setCreateDialogOpen(open)
+              if (!open) setCreateError(null)
+            }}
+          >
+            <DialogContent className="sm:max-w-[440px]">
+              <DialogHeader>
+                <DialogTitle>{t('accounts.createSandboxTitle', { defaultValue: '新建沙盒账户' })}</DialogTitle>
+                <DialogDescription>
+                  {t('accounts.createSandboxDesc', {
+                    defaultValue: '用虚拟资金在模拟成交模型下交易，不涉及真实现金与钱包。',
+                  })}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-3 py-1">
+                <div className="grid gap-1.5">
+                  <Label htmlFor="sandbox-account-name">{t('accounts.fieldAccountName', { defaultValue: '账户名称' })}</Label>
+                  <Input
+                    id="sandbox-account-name"
+                    value={accountDraft.name}
+                    maxLength={100}
+                    placeholder={t('accounts.fieldAccountNamePlaceholder', { defaultValue: '例如：我的纸面账户' })}
+                    onChange={(event) => setAccountDraft((draft) => ({ ...draft, name: event.target.value }))}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="sandbox-initial-capital">{t('accounts.fieldInitialCapital', { defaultValue: '初始资金（USD）' })}</Label>
+                    <Input
+                      id="sandbox-initial-capital"
+                      type="number"
+                      min={100}
+                      max={10000000}
+                      step={100}
+                      value={accountDraft.initial_capital}
+                      onChange={(event) => setAccountDraft((draft) => ({ ...draft, initial_capital: event.target.value }))}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="sandbox-max-position-pct">{t('accounts.fieldMaxPositionPct', { defaultValue: '单仓上限（%）' })}</Label>
+                    <Input
+                      id="sandbox-max-position-pct"
+                      type="number"
+                      min={1}
+                      max={100}
+                      step={1}
+                      value={accountDraft.max_position_pct}
+                      onChange={(event) => setAccountDraft((draft) => ({ ...draft, max_position_pct: event.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label htmlFor="sandbox-max-positions">{t('accounts.fieldMaxPositions', { defaultValue: '最大持仓数' })}</Label>
+                  <Input
+                    id="sandbox-max-positions"
+                    type="number"
+                    min={1}
+                    max={100}
+                    step={1}
+                    value={accountDraft.max_positions}
+                    onChange={(event) => setAccountDraft((draft) => ({ ...draft, max_positions: event.target.value }))}
+                  />
+                </div>
+                {createError && <p className="text-[11px] text-red-400">{createError}</p>}
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCreateDialogOpen(false)}
+                  disabled={createAccountMutation.isPending}
+                >
+                  {t('accounts.createSandboxCancel', { defaultValue: '取消' })}
+                </Button>
+                <Button size="sm" onClick={submitCreateAccount} disabled={createAccountMutation.isPending}>
+                  {createAccountMutation.isPending
+                    ? t('accounts.createSandboxCreating', { defaultValue: '创建中…' })
+                    : t('accounts.createSandboxSubmit', { defaultValue: '创建' })}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
       )}
       {workspaceTab === 'live' && (
