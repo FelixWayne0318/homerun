@@ -1,7 +1,7 @@
 import { memo, useMemo } from 'react'
 import { useAtom } from 'jotai'
 import { useTranslation } from 'react-i18next'
-import { Loader2, Plus } from 'lucide-react'
+import { Bot, Loader2, Plus } from 'lucide-react'
 import type { Trader } from '../services/apiTraders'
 import {
   type BotRosterGroupBy,
@@ -226,7 +226,31 @@ function BotRosterPanelImpl({
               </div>
             </div>
           ) : null}
-          {grouped.length === 0 ? (
+          {totalTraderCount === 0 ? (
+            <div className="py-3 px-3 text-center space-y-1.5">
+              <div className="mx-auto w-8 h-8 rounded-full bg-cyan-500/10 flex items-center justify-center">
+                <Bot className="w-4 h-4 text-cyan-400" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-[12px] font-medium text-foreground leading-tight">
+                  {t('botRosterPanel.emptyTitle', { defaultValue: '还没有机器人' })}
+                </p>
+                <p className="text-[11px] text-muted-foreground max-w-[240px] mx-auto leading-snug">
+                  {t('botRosterPanel.emptyDescription', {
+                    defaultValue: '机器人是交易的执行单位。创建一个机器人来开始交易。'
+                  })}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                className="h-7 text-[11px] bg-cyan-500 hover:bg-cyan-600 text-white"
+                onClick={openCreateTraderFlyout}
+              >
+                <Plus className="w-3.5 h-3.5 mr-1" />
+                {t('botRosterPanel.emptyCreateButton', { defaultValue: '创建第一个机器人' })}
+              </Button>
+            </div>
+          ) : grouped.length === 0 ? (
             <p className="py-6 text-center text-[11px] text-muted-foreground">{t('botRosterPanel.noBotsMatch')}</p>
           ) : (
             grouped.map((group) => {
