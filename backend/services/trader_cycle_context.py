@@ -48,7 +48,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Mapping, Optional
@@ -205,7 +205,9 @@ class TraderCycleContext:
     #: Keyed by short names: ``open_pos``, ``open_order``, ``occupied``,
     #: ``reentry_cd``, ``daily_pnl``, ``loss_count``, ``last_loss``,
     #: ``unrealized_pnl``, ``pending_live_exit``, ``provider_failure``.
-    acquire_timings_ms: Mapping[str, int] = MappingProxyType({})
+    acquire_timings_ms: Mapping[str, int] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
 
 # ── Internal projection state ───────────────────────────────────────
