@@ -1457,16 +1457,21 @@ class LiveExecutionService:
                 return None
             if not hasattr(self, "_data_api_client") or self._data_api_client is None or self._data_api_client.is_closed:
                 self._data_api_client = httpx.Client(timeout=8.0, follow_redirects=True)
+            # Data API v1 is retired upstream (410 on every v1 route); v2
+            # exposes the same wallet facts under /v2/user-stats, wrapped in
+            # {"data": {...}}.
             response = self._data_api_client.get(
-                f"{data_api_base}/profile",
-                params={"address": eoa_address},
+                f"{data_api_base}/v2/user-stats",
+                params={"user": eoa_address},
             )
             if response.status_code != 200:
                 return None
             payload = response.json()
+            if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+                payload = payload["data"]
             if not isinstance(payload, dict):
                 return None
-            for key in ("proxyWallet", "proxyAddress", "wallet"):
+            for key in ("proxy_wallet", "proxyWallet", "proxyAddress", "wallet"):
                 candidate = self._normalize_evm_address(payload.get(key))
                 if candidate and candidate.lower() != eoa_address.lower():
                     return candidate

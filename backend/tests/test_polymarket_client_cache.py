@@ -144,20 +144,18 @@ async def test_get_wallet_trades_paginated_cache_hit():
     polymarket_client._wallet_trades_cache.invalidate()
     fetch_calls = 0
 
-    async def fake_get_wallet_trades(address, *, limit, offset):
+    async def fake_page(path, params, *, preferred_keys=("data", "items")):
         nonlocal fetch_calls
         fetch_calls += 1
-        if offset > 0:
-            return []
-        return [{"side": "BUY", "asset": "abc", "size": 1.0}]
+        return [{"side": "BUY", "asset": "abc", "size": 1.0}], None
 
-    with patch.object(polymarket_client, "get_wallet_trades", side_effect=fake_get_wallet_trades):
+    with patch.object(polymarket_client, "_data_v2_page", side_effect=fake_page):
         a = await polymarket_client.get_wallet_trades_paginated("0xWALLET", max_trades=100)
         b = await polymarket_client.get_wallet_trades_paginated("0xWALLET", max_trades=100)
     assert a == b
-    # First call: 2 invocations of get_wallet_trades (1 page + empty terminator).
-    # Second call should be 0 invocations (cached).
-    assert fetch_calls in (1, 2), f"expected 1-2 fetch calls (page + maybe terminator), got {fetch_calls}"
+    # v2 paginates by cursor: one page with no next_cursor ends the walk.
+    # Second call should be served from the 60s TTL cache.
+    assert fetch_calls == 1, f"expected exactly 1 page fetch, got {fetch_calls}"
 
 
 @pytest.mark.asyncio
@@ -165,10 +163,10 @@ async def test_invalidate_wallet_caches_address_specific():
     polymarket_client._wallet_trades_cache.invalidate()
     polymarket_client._closed_positions_cache.invalidate()
 
-    async def fake_trades(address, *, limit, offset):
-        return [{"asset": "x", "address_marker": address}] if offset == 0 else []
+    async def fake_page(path, params, *, preferred_keys=("data", "items")):
+        return [{"asset": "x", "address_marker": params.get("user")}], None
 
-    with patch.object(polymarket_client, "get_wallet_trades", side_effect=fake_trades):
+    with patch.object(polymarket_client, "_data_v2_page", side_effect=fake_page):
         await polymarket_client.get_wallet_trades_paginated("0xAAA", max_trades=10)
         await polymarket_client.get_wallet_trades_paginated("0xBBB", max_trades=10)
 

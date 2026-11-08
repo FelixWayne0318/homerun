@@ -153,7 +153,9 @@ def _normalize_trade(raw: Any) -> Optional[dict[str, Any]]:
         or raw.get("slug")
         or ""
     ).strip() or None
-    asset_token = str(raw.get("asset") or "").strip() or None
+    # Data API v2 renamed this field to ``token_id``; keep the v1 ``asset``
+    # alias first so both row shapes normalize the same way.
+    asset_token = str(raw.get("asset") or raw.get("token_id") or "").strip() or None
     notional = _coerce_float(raw.get("notional") or raw.get("usdc_size"))
     if notional is None and size is not None:
         notional = float(price) * float(size)

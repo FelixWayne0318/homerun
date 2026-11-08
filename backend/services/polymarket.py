@@ -153,6 +153,11 @@ class PolymarketClient:
         self.gamma_url = settings.GAMMA_API_URL
         self.clob_url = settings.CLOB_API_URL
         self.data_url = settings.DATA_API_URL
+        # Data API v1 was retired upstream (every v1 route now answers
+        # ``410 {"error": "Data API v1 has been retired"}``, measured
+        # 2026-11-08).  v2 lives under ``/v2``, uses cursor-only pagination
+        # and wraps every payload in ``{"data": ..., "pagination": {...}}``.
+        self.data_v2_url = str(self.data_url or "").rstrip("/") + "/v2"
         self._client: Optional[httpx.AsyncClient] = None
         self._trading_client: Optional[httpx.AsyncClient] = None  # Proxy-aware for trading
         self._market_cache: dict[str, dict] = {}  # condition_id -> {question, slug}
@@ -2156,30 +2161,31 @@ class PolymarketClient:
     # ==================== DATA API ====================
 
     async def get_wallet_positions(self, address: str) -> list[dict]:
-        """Get open positions for a wallet, paging through all results."""
+        """Get open positions for a wallet (Data API v2, cursor paginated).
+
+        v2 returns the full lifecycle (OPEN / REDEEMABLE / MERGEABLE /
+        CLOSED); CLOSED rows are filtered out here so callers keep seeing
+        what "current positions" meant on v1.
+        """
         normalized_address = str(address or "").strip()
         if not normalized_address:
             return []
 
         page_size = 500
-        offset = 0
+        cursor: Optional[str] = None
         all_rows: list[dict] = []
         seen_position_keys: set[tuple[str, str, str]] = set()
 
         for _ in range(_WALLET_POSITIONS_MAX_PAGES):
-            response = await self._rate_limited_get(
-                f"{self.data_url}/positions",
-                params={
-                    "user": normalized_address,
-                    "limit": page_size,
-                    "offset": offset,
-                },
-            )
-            response.raise_for_status()
-
-            payload = response.json()
-            page_rows = self._extract_list_payload(
-                payload,
+            params: dict = {
+                "user": normalized_address,
+                "limit": page_size,
+            }
+            if cursor:
+                params["cursor"] = cursor
+            page_rows, next_cursor = await self._data_v2_page(
+                "/positions",
+                params,
                 preferred_keys=("data", "items", "positions"),
             )
             if not page_rows:
@@ -2187,6 +2193,8 @@ class PolymarketClient:
 
             unique_page_rows: list[dict] = []
             for row in page_rows:
+                if str(row.get("status") or "").strip().upper() == "CLOSED":
+                    continue
                 key = (
                     str(row.get("asset") or row.get("asset_id") or row.get("token_id") or "").strip(),
                     str(row.get("conditionId") or row.get("condition_id") or row.get("market") or "").strip(),
@@ -2195,15 +2203,14 @@ class PolymarketClient:
                 if key in seen_position_keys:
                     continue
                 seen_position_keys.add(key)
-                unique_page_rows.append(row)
+                unique_page_rows.append(self._v2_position_to_legacy(row))
 
             if unique_page_rows:
                 all_rows.extend(unique_page_rows)
 
-            if len(page_rows) < page_size:
+            if not next_cursor or next_cursor == cursor:
                 break
-
-            offset += len(page_rows)
+            cursor = next_cursor
 
         return all_rows
 
@@ -2461,14 +2468,27 @@ class PolymarketClient:
 
         return {"username": None, "address": address}
 
-    async def get_wallet_trades(self, address: str, limit: int = 100, offset: int = 0) -> list[dict]:
-        """Get recent trades for a wallet."""
-        params = {
+    async def get_wallet_trades(
+        self,
+        address: str,
+        limit: int = 100,
+        offset: int = 0,
+        cursor: Optional[str] = None,
+    ) -> list[dict]:
+        """Get recent trades for a wallet (Data API v2).
+
+        v2 dropped ``offset`` entirely (cursor-only pagination), so the
+        ``offset`` argument is kept purely for call-site compatibility and is
+        ignored.  Pass ``cursor`` to continue a walk.
+        """
+        del offset  # not expressible on v2
+        params: dict = {
             "user": address,
             "limit": min(max(int(limit or 100), 1), 500),
-            "offset": max(int(offset or 0), 0),
         }
-        response = await self._rate_limited_get(f"{self.data_url}/trades", params=params)
+        if cursor:
+            params["cursor"] = str(cursor)
+        response = await self._rate_limited_get(f"{self.data_v2_url}/trades", params=params)
         response.raise_for_status()
         data = response.json()
         return self._extract_list_payload(
@@ -2513,41 +2533,34 @@ class PolymarketClient:
         cache_key = (normalized_address, capped_max_trades, capped_page_size)
 
         async def _fetch() -> list[dict]:
-            import httpx as _httpx
-
             all_trades: list[dict] = []
-            offset = 0
-            hit_upstream_cap = False
+            cursor: Optional[str] = None
             while len(all_trades) < capped_max_trades:
+                params: dict = {
+                    "user": normalized_address,
+                    "limit": capped_page_size,
+                }
+                if cursor:
+                    params["cursor"] = cursor
                 try:
-                    page = await self.get_wallet_trades(
-                        normalized_address, limit=capped_page_size, offset=offset
+                    page, next_cursor = await self._data_v2_page(
+                        "/trades",
+                        params,
+                        preferred_keys=("data", "items", "trades", "activity"),
                     )
-                except _httpx.HTTPStatusError as exc:
-                    # Polymarket returns 400 once offset exceeds ~3500.
-                    # Treat as end-of-data, not as a crash.
-                    if exc.response is not None and exc.response.status_code == 400:
-                        hit_upstream_cap = True
-                        _logger.info(
-                            "polymarket /trades hit upstream offset cap at offset=%d for wallet %s — "
-                            "returning %d trades captured so far",
-                            offset, normalized_address, len(all_trades),
-                        )
-                        break
-                    raise
+                except Exception as exc:
+                    _logger.info(
+                        "polymarket /v2/trades page failed for wallet %s (have %d trades): %s",
+                        normalized_address, len(all_trades), exc,
+                    )
+                    break
                 if not page:
                     break
                 all_trades.extend(page)
-                if len(page) < capped_page_size:
+                if not next_cursor or next_cursor == cursor:
                     break
-                offset += capped_page_size
+                cursor = next_cursor
                 await asyncio.sleep(0.05)
-            if hit_upstream_cap and len(all_trades) < capped_max_trades:
-                _logger.info(
-                    "polymarket /trades returned %d trades for wallet %s "
-                    "(requested %d; truncated by upstream offset cap)",
-                    len(all_trades), normalized_address, capped_max_trades,
-                )
             return all_trades[:capped_max_trades]
 
         result = await self._wallet_trades_cache.get_or_fetch(cache_key, _fetch)
@@ -2556,11 +2569,14 @@ class PolymarketClient:
         return list(result)
 
     async def get_market_trades(self, condition_id: str, limit: int = 100, offset: int = 0) -> list[dict]:
-        """Get recent trades for a market"""
-        params = {"market": condition_id, "limit": limit}
-        if offset > 0:
-            params["offset"] = offset
-        response = await self._rate_limited_get(f"{self.data_url}/trades", params=params)
+        """Get recent trades for a market (Data API v2).
+
+        v2 anchors market feeds on ``condition`` (or ``market``); ``offset``
+        no longer exists upstream, so it is ignored here.
+        """
+        del offset  # v2 is cursor-only
+        params = {"condition": condition_id, "limit": limit}
+        response = await self._rate_limited_get(f"{self.data_v2_url}/trades", params=params)
         response.raise_for_status()
         data = response.json()
         return self._extract_list_payload(
@@ -2574,32 +2590,33 @@ class PolymarketClient:
         offset: int = 0,
         activity_type: Optional[str] = None,
         user: Optional[str] = None,
+        cursor: Optional[str] = None,
     ) -> list[dict]:
         """Fetch recent account activity from the Data API.
 
         Uses ``/v1/activity`` when available, then falls back to ``/activity``.
         """
-        params = {
+        del offset  # v2 is cursor-only
+        params: dict = {
             "limit": min(limit, 500),
-            "offset": min(offset, 1000),
         }
         if user:
             params["user"] = user
         if activity_type:
             params["type"] = activity_type
+        if cursor:
+            params["cursor"] = str(cursor)
 
-        for endpoint in (f"{self.data_url}/v1/activity", f"{self.data_url}/activity"):
-            try:
-                response = await self._rate_limited_get(endpoint, params=params)
-                response.raise_for_status()
-                data = response.json()
-                return self._extract_list_payload(
-                    data,
-                    preferred_keys=("data", "items", "activity"),
-                )
-            except Exception:
-                continue
-        return []
+        try:
+            rows, _next_cursor = await self._data_v2_page(
+                "/activity",
+                params,
+                preferred_keys=("data", "items", "activity"),
+            )
+            return rows
+        except Exception as exc:
+            _logger.debug("activity fetch failed", error=str(exc))
+            return []
 
     async def get_wallet_activity(
         self,
@@ -2653,23 +2670,41 @@ class PolymarketClient:
         activity_types: Optional[list[str] | tuple[str, ...] | set[str]] = None,
     ) -> list[dict]:
         all_items: list[dict] = []
-        offset = 0
         capped_page_size = max(1, min(int(page_size or 500), 500))
         capped_max_items = max(1, min(int(max_items or 1000), 10_000))
-        while len(all_items) < capped_max_items:
-            page = await self.get_wallet_activity(
-                address,
-                limit=capped_page_size,
-                offset=offset,
-                activity_types=activity_types,
-            )
-            if not page:
-                break
-            all_items.extend(page)
-            if len(page) < capped_page_size:
-                break
-            offset += capped_page_size
-            await asyncio.sleep(0.05)
+        normalized_types = [
+            str(activity_type or "").strip()
+            for activity_type in (activity_types or [])
+            if str(activity_type or "").strip()
+        ]
+        # v2 paginates by cursor only, so each activity type is walked
+        # independently with its own cursor.
+        for activity_type in (normalized_types or [None]):
+            cursor: Optional[str] = None
+            while len(all_items) < capped_max_items:
+                params: dict = {
+                    "limit": capped_page_size,
+                    "user": address,
+                }
+                if activity_type:
+                    params["type"] = activity_type
+                if cursor:
+                    params["cursor"] = cursor
+                try:
+                    page, next_cursor = await self._data_v2_page(
+                        "/activity",
+                        params,
+                        preferred_keys=("data", "items", "activity"),
+                    )
+                except Exception:
+                    break
+                if not page:
+                    break
+                all_items.extend(page)
+                if not next_cursor or next_cursor == cursor:
+                    break
+                cursor = next_cursor
+                await asyncio.sleep(0.05)
         return all_items[:capped_max_items]
 
     async def get_market_holders(
@@ -2678,25 +2713,41 @@ class PolymarketClient:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
-        """Fetch holders for a market from the Data API."""
-        params = {
-            "market": market_id,
-            "limit": min(limit, 500),
-            "offset": min(offset, 1000),
-        }
+        """Fetch holders for a market (Data API v2).
 
-        for endpoint in (f"{self.data_url}/holders", f"{self.data_url}/v1/holders"):
-            try:
-                response = await self._rate_limited_get(endpoint, params=params)
-                response.raise_for_status()
-                data = response.json()
-                return self._extract_list_payload(
-                    data,
-                    preferred_keys=("data", "items", "holders"),
-                )
-            except Exception:
+        v2 groups rows per token — ``{"data": [{"token_id": ..., "holders":
+        [...]}]}`` — and requires the on-chain ``condition`` anchor for cursor
+        walks, so the nested rows are flattened here and ``proxy_wallet`` /
+        ``amount`` are mapped onto the v1 ``proxyWallet`` / ``size`` names the
+        callers read.
+        """
+        del offset  # v2 is cursor-only
+        anchor_key = "condition" if str(market_id or "").startswith("0x") else "market_id"
+        params: dict = {anchor_key: market_id, "limit": min(limit, 500)}
+        try:
+            rows, _next_cursor = await self._data_v2_page("/holders", params)
+        except Exception as exc:
+            _logger.debug("holders fetch failed", market_id=str(market_id)[:12], error=str(exc))
+            return []
+
+        flat: list[dict] = []
+        for group in rows:
+            if not isinstance(group, dict):
                 continue
-        return []
+            token_id = str(group.get("token_id") or "")
+            for holder in (group.get("holders") or []):
+                if not isinstance(holder, dict):
+                    continue
+                mapped = dict(holder)
+                mapped.setdefault("proxyWallet", holder.get("proxy_wallet"))
+                mapped.setdefault("address", holder.get("proxy_wallet"))
+                mapped.setdefault("size", holder.get("amount"))
+                mapped.setdefault("shares", holder.get("amount"))
+                mapped.setdefault("price", 0)
+                if token_id and not mapped.get("asset"):
+                    mapped["asset"] = token_id
+                flat.append(mapped)
+        return flat
 
     @staticmethod
     def _extract_list_payload(
@@ -2716,6 +2767,88 @@ class PolymarketClient:
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]
         return []
+
+    # ---------------- Data API v2 helpers ----------------
+
+    async def _data_v2_page(
+        self,
+        path: str,
+        params: dict,
+        *,
+        preferred_keys: tuple[str, ...] = ("data", "items"),
+    ) -> tuple[list[dict], Optional[str]]:
+        """Fetch one v2 page and return ``(rows, next_cursor)``.
+
+        v2 is cursor-only: there is no ``offset`` query parameter, and each
+        payload is wrapped in ``{"data": ..., "pagination": {"next_cursor": ...}}``.
+        """
+        response = await self._rate_limited_get(f"{self.data_v2_url}{path}", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        rows = self._extract_list_payload(payload, preferred_keys=preferred_keys)
+        next_cursor: Optional[str] = None
+        if isinstance(payload, dict):
+            pagination = payload.get("pagination") or {}
+            if isinstance(pagination, dict):
+                raw_cursor = pagination.get("next_cursor")
+                if raw_cursor:
+                    next_cursor = str(raw_cursor)
+        return rows, next_cursor
+
+    @staticmethod
+    def _v2_position_to_legacy(row: dict) -> dict:
+        """Map a v2 position row onto the v1 field names still used downstream.
+
+        v2 renamed most fields (``current_size`` / ``avg_price`` /
+        ``current_value`` / ``entry_cost_usdc`` / ``realized_pnl``) while the
+        rest of the codebase and the UI read the v1 camelCase spellings, so
+        keep both on the row instead of rewriting every consumer.
+        """
+        def _num(value) -> float:
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        current_size = _num(row.get("current_size") if row.get("current_size") is not None else row.get("size"))
+        current_value = _num(row.get("current_value"))
+        avg_price = _num(row.get("avg_price"))
+        entry_cost = _num(row.get("entry_cost_usdc"))
+        realized = _num(row.get("realized_pnl"))
+        unrealized = _num(row.get("unrealized_pnl"))
+        current_price = _num(row.get("current_price"))
+        if current_price <= 0 and current_size > 0:
+            current_price = current_value / current_size
+        if current_price <= 0:
+            current_price = avg_price
+
+        mapped = dict(row)
+        mapped.update(
+            {
+                "asset": str(row.get("token_id") or ""),
+                "conditionId": row.get("condition_id"),
+                "condition_id": row.get("condition_id"),
+                "outcomeIndex": row.get("outcome_index"),
+                "size": current_size,
+                "current_size": current_size,
+                "avgPrice": avg_price,
+                "avg_price": avg_price,
+                "curPrice": current_price,
+                "current_price": current_price,
+                "currentValue": current_value,
+                "current_value": current_value,
+                "initialValue": entry_cost,
+                "entry_cost_usdc": entry_cost,
+                "cashPnl": realized + unrealized,
+                "realizedPnl": realized,
+                "percentPnl": (
+                    float(row.get("percent_pnl"))
+                    if row.get("percent_pnl") is not None
+                    else (100.0 * (realized + unrealized) / entry_cost if entry_cost else 0.0)
+                ),
+            }
+        )
+        return mapped
 
     # ==================== LEADERBOARD / DISCOVERY ====================
 
@@ -2751,7 +2884,7 @@ class PolymarketClient:
             if category.upper() != "OVERALL":
                 params["category"] = category.upper()
 
-            response = await self._rate_limited_get(f"{self.data_url}/v1/leaderboard", params=params)
+            response = await self._rate_limited_get(f"{self.data_v2_url}/leaderboard", params=params)
             response.raise_for_status()
             data = response.json()
             # API may return a list or a wrapper object
@@ -3043,18 +3176,18 @@ class PolymarketClient:
     async def get_closed_positions(self, address: str, limit: int = 50, offset: int = 0) -> list[dict]:
         """Fetch closed positions for a wallet. Much more efficient than analyzing raw trades."""
         try:
-            response = await self._rate_limited_get(
-                f"{self.data_url}/closed-positions",
-                params={
-                    "user": address,
-                    "limit": min(limit, 50),
-                    "offset": offset,
-                    "sortBy": "TIMESTAMP",
-                    "sortDirection": "DESC",
-                },
+            del offset  # v2 is cursor-only
+            params: dict = {
+                "user": address,
+                "limit": min(limit, 50),
+                "status": "CLOSED",
+            }
+            rows, _next_cursor = await self._data_v2_page(
+                "/positions",
+                params,
+                preferred_keys=("data", "items", "positions"),
             )
-            response.raise_for_status()
-            return response.json()
+            return [self._v2_position_to_legacy(row) for row in rows if isinstance(row, dict)]
         except Exception as e:
             now = time.monotonic()
             if now >= self._closed_positions_warning_cooldown_until:
