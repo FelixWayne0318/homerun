@@ -291,7 +291,14 @@ class NewsFeedService:
         out: list[dict[str, Any]] = []
         for record in run_result.get("records") or []:
             observed_at = _parse_datetime(record.get("observed_at"))
-            if observed_at is None or observed_at < run_started_at:
+            # Freshness must be judged on when the record entered the store,
+            # not on the article's publish time: a story is always published
+            # before this cycle starts, so comparing observed_at with
+            # run_started_at discarded every fetched article and pinned the
+            # news feed at "0 new, 0 total".
+            ingested_at = _parse_datetime(record.get("ingested_at"))
+            freshness_ref = ingested_at or observed_at
+            if freshness_ref is None or freshness_ref < run_started_at:
                 continue
             payload = dict(record.get("payload_json") or {}) if isinstance(record.get("payload_json"), dict) else {}
             transformed = (

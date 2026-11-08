@@ -8,8 +8,9 @@ import hashlib
 import math
 from datetime import datetime, timezone
 import re
-from time import mktime
+from time import mktime, monotonic
 from typing import Any, AsyncIterator
+from urllib.parse import urlsplit
 import uuid
 
 import feedparser
@@ -51,6 +52,56 @@ def reset_shared_http_client() -> None:
             asyncio.get_event_loop().create_task(old.aclose())
         except Exception:
             pass
+
+
+_HOST_MIN_REQUEST_INTERVAL: dict[str, float] = {}
+_host_request_locks: dict[str, asyncio.Lock] = {}
+_host_last_request_at: dict[str, float] = {}
+_host_cooldown_until: dict[str, float] = {}
+_HOST_RATE_LIMIT_COOLDOWN_SECONDS = 120.0
+
+
+def _configured_host_intervals() -> dict[str, float]:
+    """Per-host minimum spacing for upstream APIs that publish a rate limit.
+
+    GDELT DOC API answers 429 ("limit requests to one every 5 seconds") when
+    hammered.  The policy already exists in settings as
+    ``EVENTS_GDELT_QUERY_DELAY_SECONDS`` / ``EVENTS_GDELT_NEWS_QUERY_DELAY_SECONDS``
+    but was never applied on the data-source HTTP path, so the 32 built-in
+    GDELT story sources fired concurrently and every call came back 429.
+    """
+    try:
+        from config import settings
+
+        delay = float(getattr(settings, "EVENTS_GDELT_QUERY_DELAY_SECONDS", 5.0) or 5.0)
+        news_delay = float(getattr(settings, "EVENTS_GDELT_NEWS_QUERY_DELAY_SECONDS", delay) or delay)
+    except Exception:
+        delay, news_delay = 5.0, 5.0
+    return {"api.gdeltproject.org": max(delay, news_delay, 1.0)}
+
+
+async def _respect_host_rate_limit(host: str) -> bool:
+    """Serialise requests to a rate-limited host at the configured spacing.
+
+    Returns ``False`` when the host is cooling down after a sustained 429 so
+    the caller can skip it for the rest of this cycle instead of stalling the
+    whole fetch behind a rate-limited upstream.
+    """
+    if _host_cooldown_until.get(host, 0.0) > monotonic():
+        return False
+    interval = _configured_host_intervals().get(host)
+    if not interval:
+        return True
+    lock = _host_request_locks.setdefault(host, asyncio.Lock())
+    async with lock:
+        last = _host_last_request_at.get(host)
+        if last is not None:
+            wait = interval - (monotonic() - last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+        _host_last_request_at[host] = monotonic()
+    return True
+
 _RETENTION_BOUNDS: dict[str, tuple[int, int]] = {
     "max_records": (1, 250_000),
     "max_age_days": (1, 3650),
@@ -481,10 +532,27 @@ class BaseDataSource:
         target = str(url or "").strip()
         if not target:
             return default
+        host = (urlsplit(target).hostname or "").lower()
         try:
             client = _get_shared_http_client()
-            response = await client.get(target, params=params, headers=headers, timeout=timeout)
+            response = None
+            for _attempt in range(2):
+                if not await _respect_host_rate_limit(host):
+                    return default
+                response = await client.get(target, params=params, headers=headers, timeout=timeout)
+                if response.status_code != 429:
+                    break
+                if host in _configured_host_intervals():
+                    # GDELT counts requests by arrival time, and a shared proxy
+                    # exit IP can still land inside the upstream window; back off
+                    # once, then cool the host down so the rest of this cycle is
+                    # not stalled behind a rate-limited upstream.
+                    await asyncio.sleep(min(10.0, 5.0 * (2 ** _attempt)))
+            if response is None:
+                return default
             if response.status_code == 429:
+                if host in _configured_host_intervals():
+                    _host_cooldown_until[host] = monotonic() + _HOST_RATE_LIMIT_COOLDOWN_SECONDS
                 return default
             response.raise_for_status()
             try:

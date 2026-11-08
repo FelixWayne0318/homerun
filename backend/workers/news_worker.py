@@ -384,7 +384,7 @@ async def _run_loop() -> None:
                         async with AsyncSessionLocal() as session:
                             result = await asyncio.wait_for(
                             workflow_orchestrator.run_cycle(session),
-                            timeout=300,
+                            timeout=900,
                         )
                         break
                     except Exception as exc:
