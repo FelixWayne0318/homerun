@@ -2797,6 +2797,26 @@ class PolymarketClient:
         return rows, next_cursor
 
     @staticmethod
+    def _leaderboard_row_to_legacy(row: dict) -> dict:
+        """Map a v2 leaderboard row onto the v1 field names callers read.
+
+        v2 returns ``user_id`` / ``user_name``; wallet discovery, username
+        lookup and the top-trader cache all read ``proxyWallet`` / ``userName``.
+        Without this mapping every row looks address-less, discovery finds
+        zero wallets and the trader counters stay at 0.
+        """
+        out = dict(row)
+        if not out.get("proxyWallet"):
+            address = row.get("wallet") or row.get("address") or row.get("user_id")
+            if isinstance(address, str) and address:
+                out["proxyWallet"] = address.lower()
+        if not out.get("userName"):
+            name = row.get("user_name") or row.get("pseudonym")
+            if isinstance(name, str) and name:
+                out["userName"] = name
+        return out
+
+    @staticmethod
     def _v2_position_to_legacy(row: dict) -> dict:
         """Map a v2 position row onto the v1 field names still used downstream.
 
@@ -2853,6 +2873,65 @@ class PolymarketClient:
 
     # ==================== LEADERBOARD / DISCOVERY ====================
 
+    async def _leaderboard_page(
+        self,
+        *,
+        limit: int,
+        time_period: str,
+        order_by: str,
+        category: str,
+        cursor: Optional[str] = None,
+    ) -> tuple[list[dict], Optional[str]]:
+        """Fetch one cursor page of the v2 leaderboard.
+
+        v2 is cursor-only: passing ``offset`` is rejected with 400
+        ("'offset' is not a query param on this API: pages are cursor-only").
+        Returns the rows plus the ``next_cursor`` to continue from, or
+        ``None`` when the listing is exhausted.
+        """
+        # v1 spelled the volume sort ``VOL``; v2 validates with
+        # "sort_by must be PNL or VOLUME" and answers 400 for ``VOL``.
+        sort_value = order_by.upper()
+        if sort_value == "VOL":
+            sort_value = "VOLUME"
+
+        params: dict[str, object] = {
+            "limit": min(limit, 50),  # API max is 50 per request
+            "timePeriod": time_period.upper(),
+            "orderBy": sort_value,
+        }
+        if category.upper() != "OVERALL":
+            params["category"] = category.upper()
+        if cursor:
+            params["cursor"] = cursor
+
+        response = await self._rate_limited_get(f"{self.data_v2_url}/leaderboard", params=params)
+        response.raise_for_status()
+        payload = response.json()
+
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = payload.get("data") or payload.get("leaderboard") or payload.get("items") or []
+        else:
+            rows = []
+
+        # v2 renamed the identity fields.  Every caller downstream (wallet
+        # discovery, username lookup, top-trader cache) reads v1 names
+        # ``proxyWallet`` / ``userName``, so normalize before returning —
+        # otherwise rows look address-less and discovery silently finds
+        # zero wallets.
+        rows = [self._leaderboard_row_to_legacy(row) for row in rows if isinstance(row, dict)]
+
+        next_cursor: Optional[str] = None
+        if isinstance(payload, dict):
+            pagination = payload.get("pagination") or {}
+            if isinstance(pagination, dict):
+                raw_cursor = pagination.get("next_cursor")
+                if isinstance(raw_cursor, str) and raw_cursor:
+                    next_cursor = raw_cursor
+        return rows, next_cursor
+
     async def get_leaderboard(
         self,
         limit: int = 50,
@@ -2873,27 +2952,35 @@ class PolymarketClient:
             offset: Number of results to skip (for pagination)
         """
         try:
-            # Polymarket data API leaderboard endpoint
-            params = {
-                "limit": min(limit, 50),  # API max is 50 per request
-                "timePeriod": time_period.upper(),
-                "orderBy": order_by.upper(),
-            }
-            if offset > 0:
-                params["offset"] = offset
-            # Only include category if not OVERALL
-            if category.upper() != "OVERALL":
-                params["category"] = category.upper()
-
-            response = await self._rate_limited_get(f"{self.data_v2_url}/leaderboard", params=params)
-            response.raise_for_status()
-            data = response.json()
-            # API may return a list or a wrapper object
-            if isinstance(data, list):
-                return data
-            if isinstance(data, dict):
-                return data.get("data", data.get("leaderboard", data.get("items", [])))
-            return []
+            rows: list[dict] = []
+            cursor: Optional[str] = None
+            skipped = 0
+            # v2 pages are cursor-only, so an ``offset`` argument is honoured
+            # here by walking cursors instead of forwarding it to the API
+            # (which answers 400).  Call sites keep their existing signatures.
+            while len(rows) < limit:
+                page, next_cursor = await self._leaderboard_page(
+                    limit=min(limit, 50),
+                    time_period=time_period,
+                    order_by=order_by,
+                    category=category,
+                    cursor=cursor,
+                )
+                if not page:
+                    break
+                if skipped < offset:
+                    need = offset - skipped
+                    if len(page) <= need:
+                        skipped += len(page)
+                        page = []
+                    else:
+                        page = page[need:]
+                        skipped = offset
+                rows.extend(page[: max(0, limit - len(rows))])
+                if not next_cursor or len(rows) >= limit:
+                    break
+                cursor = next_cursor
+            return rows
         except Exception as e:
             _logger.warning("Leaderboard fetch error", error=str(e))
             return []
@@ -2915,31 +3002,30 @@ class PolymarketClient:
             order_by: PNL (profit/loss) or VOL (volume)
             category: Market category filter
         """
-        all_traders = []
-        offset = 0
+        all_traders: list[dict] = []
         page_size = 50
+        cursor: Optional[str] = None
 
         while len(all_traders) < total_limit:
-            remaining = total_limit - len(all_traders)
-            fetch_count = min(page_size, remaining)
+            fetch_count = min(page_size, total_limit - len(all_traders))
 
-            page = await self.get_leaderboard(
+            page, next_cursor = await self._leaderboard_page(
                 limit=fetch_count,
                 time_period=time_period,
                 order_by=order_by,
                 category=category,
-                offset=offset,
+                cursor=cursor,
             )
 
             if not page:
                 break  # No more results
 
-            all_traders.extend(page)
-            offset += len(page)
+            all_traders.extend(page[:fetch_count])
 
-            # If we got fewer results than requested, we've reached the end
-            if len(page) < fetch_count:
+            # Cursor exhausted, or a short page means the listing ended.
+            if not next_cursor or len(page) < fetch_count:
                 break
+            cursor = next_cursor
 
         return all_traders[:total_limit]
 
