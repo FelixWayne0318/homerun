@@ -8,12 +8,25 @@
 # open on.
 #
 # Usage
-#   cp .env.example .env       # then edit secrets
-#   docker compose up -d
+#   cp .env.example .env            # then edit secrets
+#   docker compose up -d --build    # ALWAYS pass --build (see below)
 #
-# Defaults pull pre-built images from GHCR.  To build locally:
-#   docker compose build
-#   docker compose up -d
+# Images: every backend service carries both `image: ghcr.io/...` and a local
+# `build:` context.  `docker compose up -d` WITHOUT `--build` pulls the upstream
+# GHCR image, which predates this checkout's fixes (Polymarket data-API v2
+# migration, backtest discovery-sampling wiring).  Deploy from this checkout
+# with `--build` so the containers run the code that was actually tested.
+#
+# Memory: this stack targets a 16 GB host.  The per-service mem_limit values
+# are ceilings, not reservations — Docker OOM-kills the offending container
+# instead of the whole box.  Budget:
+#   postgres 6g  redis 1.5g  backend 2g  frontend 512m
+#   worker-trading 2g  worker-detection 5g  worker-jobs 4g
+#   worker-news 3g  worker-discovery 2g
+# Resident idle sits far below that sum.  The genuinely hot combination is a
+# large backtest (worker-jobs) running while the scanner (worker-detection)
+# sweeps the full market list — on 16 GB, either run heavy backtests between
+# scanner sweeps or lower the scanner cadence in Settings.
 #
 # Worker plane split is load-bearing — don't collapse the three worker
 # services into one.  See gui.py:233 and backend/workers/host.py for
@@ -63,9 +76,9 @@ services:
       - -c
       - max_connections=200
       - -c
-      - shared_buffers=4GB
+      - shared_buffers=3GB
       - -c
-      - effective_cache_size=10GB
+      - effective_cache_size=6GB
       - -c
       - work_mem=32MB
       - -c
@@ -149,7 +162,13 @@ services:
       - shared_preload_libraries=pg_stat_statements
       - -c
       - track_activity_query_size=2048
-    shm_size: '5g'
+    # 16 GB hosts: 3 GB shared_buffers + 1 GB maintenance_work_mem + WAL
+    # segments and shm all land in the same RAM budget as the six worker
+    # planes below, so this stack trades ~1 GB of Postgres page cache for
+    # head-room the workers would otherwise take from swap.
+    shm_size: '2g'
+    mem_limit: 6g
+    memswap_limit: 6g
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-homerun}
       POSTGRES_USER: ${POSTGRES_USER:-homerun}
@@ -169,6 +188,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: homerun-redis
+    mem_limit: 1.5g
+    memswap_limit: 1.5g
     command:
       - redis-server
       - --save
@@ -219,6 +240,8 @@ services:
   backend:
     <<: *backend-image
     container_name: homerun-backend
+    mem_limit: 2g
+    memswap_limit: 2g
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       <<: *backend-env
@@ -247,6 +270,8 @@ services:
   worker-trading:
     <<: *backend-image
     container_name: homerun-worker-trading
+    mem_limit: 2g
+    memswap_limit: 2g
     command: ["python", "-m", "workers.host", "trading"]
     environment:
       <<: *backend-env
@@ -261,6 +286,8 @@ services:
   worker-news:
     <<: *backend-image
     container_name: homerun-worker-news
+    mem_limit: 3g
+    memswap_limit: 3g
     command: ["python", "-m", "workers.host", "news"]
     environment:
       <<: *backend-env
@@ -275,11 +302,58 @@ services:
   worker-discovery:
     <<: *backend-image
     container_name: homerun-worker-discovery
+    mem_limit: 2g
+    memswap_limit: 2g
     command: ["python", "-m", "workers.host", "discovery"]
     environment:
       <<: *backend-env
       HOMERUN_PROCESS_ROLE: worker
       HOMERUN_WORKER_PLANE: discovery
+    volumes: *backend-volumes
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Scanner / market-catalog / events plane.  Scanner and its detection
+  # workers were moved off the trading plane in 22d69f0f ("Phase A.2:
+  # move scanner + detection workers to a dedicated 'detection' plane"),
+  # which post-dates this file's last edit — without this service the
+  # scanner never runs on a server deploy and the opportunity feed stays
+  # empty.  It runs its own feed_manager + intent_runtime so scanner
+  # WS-strict signals still get live quotes.
+  worker-detection:
+    <<: *backend-image
+    container_name: homerun-worker-detection
+    mem_limit: 5g
+    memswap_limit: 5g
+    command: ["python", "-m", "workers.host", "detection"]
+    environment:
+      <<: *backend-env
+      HOMERUN_PROCESS_ROLE: worker
+      HOMERUN_WORKER_PLANE: detection
+    volumes: *backend-volumes
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Operator job-queue plane (757b956b): BacktestRun, ProviderImportJob,
+  # reverse-engineer jobs and the Cox PH trainer all drain here.  Same
+  # drift as detection — the plane was split out after this file was
+  # written, so without this service every backtest and every reverse-
+  # engineering job sits "Queued" forever.  Must stay a separate process:
+  # replays are CPU/GIL-heavy and would stall the trading event loop.
+  worker-jobs:
+    <<: *backend-image
+    container_name: homerun-worker-jobs
+    mem_limit: 4g
+    memswap_limit: 4g
+    command: ["python", "-m", "workers.host", "jobs"]
+    environment:
+      <<: *backend-env
+      HOMERUN_PROCESS_ROLE: worker
+      HOMERUN_WORKER_PLANE: jobs
     volumes: *backend-volumes
     depends_on:
       backend:
@@ -296,6 +370,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: homerun-frontend
+    mem_limit: 512m
+    memswap_limit: 512m
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
