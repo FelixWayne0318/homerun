@@ -2592,9 +2592,10 @@ class PolymarketClient:
         user: Optional[str] = None,
         cursor: Optional[str] = None,
     ) -> list[dict]:
-        """Fetch recent account activity from the Data API.
+        """Fetch recent account activity from the Data API (v2).
 
-        Uses ``/v1/activity`` when available, then falls back to ``/activity``.
+        v2 paginates by cursor only; ``offset`` is kept for call-site
+        compatibility and ignored.
         """
         del offset  # v2 is cursor-only
         params: dict = {
