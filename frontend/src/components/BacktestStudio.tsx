@@ -1769,6 +1769,12 @@ export default function BacktestStudio({
   const [seed, setSeed] = useState<string>('')
   const [impactBps, setImpactBps] = useState<string>('')
   const [makerRebateBps, setMakerRebateBps] = useState<string>('')
+  // Discovery replay density.  The backend already accepts these two on
+  // POST /backtest/runs/enqueue; leaving them empty keeps its defaults
+  // (1800 s per tick, 96 ticks), which collapses a 47-minute window into a
+  // single decision point and yields zero opportunities for 5m/15m crypto.
+  const [discoverySampleInterval, setDiscoverySampleInterval] = useState<string>('')
+  const [discoveryMaxTicks, setDiscoveryMaxTicks] = useState<string>('')
   // Default window: 1 day for fast iteration.  Earlier default of 7d
   // routinely produced 1.5M-snapshot replays that took 30s+ wall-clock
   // on the API thread (now mitigated by the worker process, but still
@@ -2459,6 +2465,10 @@ export default function BacktestStudio({
       provider_dataset_ids: dsetIds,
       submit_p50_ms: submitP50 ? parseFloat(submitP50) : undefined,
       submit_p95_ms: submitP95 ? parseFloat(submitP95) : undefined,
+      discovery_sample_interval_seconds: discoverySampleInterval
+        ? parseFloat(discoverySampleInterval)
+        : undefined,
+      discovery_max_ticks: discoveryMaxTicks ? parseInt(discoveryMaxTicks, 10) : undefined,
       seed: seed ? parseInt(seed, 10) : undefined,
       counterfactual_sample_size: 8,
       ensemble_sample_size: 8,
@@ -2773,6 +2783,50 @@ export default function BacktestStudio({
                     </div>
                   </div>
                 </div>
+
+                {/* Discovery sampling — replay tick density */}
+                <details className="group rounded-md border border-border/50 bg-card/40">
+                  <summary className="cursor-pointer list-none px-3 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-cyan-400" />
+                      {t('backtestStudio.setupSamplingTitle', { defaultValue: 'Discovery sampling' })}
+                      <span className="ml-2 text-[10px] font-normal text-muted-foreground/70 normal-case">
+                        {t('backtestStudio.setupSamplingHint', { defaultValue: 'lower for 5m/15m crypto' })}
+                      </span>
+                    </span>
+                    <span className="text-[12px] text-muted-foreground transition-transform group-open:rotate-90">▸</span>
+                  </summary>
+                  <div className="grid grid-cols-2 gap-3 px-3 pb-3">
+                    <div>
+                      <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {t('backtestStudio.labelSampleInterval')}
+                      </Label>
+                      <Input
+                        value={discoverySampleInterval}
+                        onChange={(e) => setDiscoverySampleInterval(e.target.value)}
+                        placeholder={t('backtestStudio.placeholderSamplingDefault')}
+                        className="h-8"
+                      />
+                      <p className="mt-1 text-[10px] leading-snug text-muted-foreground/80">
+                        {t('backtestStudio.hintSampleInterval')}
+                      </p>
+                    </div>
+                    <div>
+                      <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {t('backtestStudio.labelMaxTicks')}
+                      </Label>
+                      <Input
+                        value={discoveryMaxTicks}
+                        onChange={(e) => setDiscoveryMaxTicks(e.target.value)}
+                        placeholder={t('backtestStudio.placeholderSamplingDefault')}
+                        className="h-8"
+                      />
+                      <p className="mt-1 text-[10px] leading-snug text-muted-foreground/80">
+                        {t('backtestStudio.hintMaxTicks')}
+                      </p>
+                    </div>
+                  </div>
+                </details>
 
                 {/* Run mechanics — latency, impact, rebate */}
                 <details className="group rounded-md border border-border/50 bg-card/40">

@@ -344,6 +344,11 @@ export interface RunBacktestRequest {
   submit_p95_ms?: number
   cancel_p50_ms?: number
   cancel_p95_ms?: number
+  /** Seconds each discovery replay tick spans.  Backend default 1800.0 —
+   *  fine for slow book-driven strategies, far too coarse for 5m/15m crypto. */
+  discovery_sample_interval_seconds?: number
+  /** Cap on the number of discovery replay ticks.  Backend default 96. */
+  discovery_max_ticks?: number
   seed?: number
   counterfactual_sample_size?: number
   ensemble_sample_size?: number
