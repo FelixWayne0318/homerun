@@ -1008,7 +1008,7 @@ export default function NewsIntelligencePanel({
   const { data: workflowStatus } = useQuery({
     queryKey: ['news-workflow-status'],
     queryFn: getNewsWorkflowStatus,
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const { data: workflowFindingsData, isLoading: findingsLoading } = useQuery({
@@ -1019,7 +1019,7 @@ export default function NewsIntelligencePanel({
       max_age_hours: 24,
       limit: 150,
     }),
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
     enabled: mode !== 'feed' && subView === 'workflow',
   })
 
@@ -1058,7 +1058,7 @@ export default function NewsIntelligencePanel({
   const { data: feedStatus } = useQuery({
     queryKey: ['news-feed-status'],
     queryFn: getNewsFeedStatus,
-    refetchInterval: isConnected ? false : 60000,
+    refetchInterval: isConnected ? 60000 : 60000,
   })
 
   const PAGE_SIZE = 100
@@ -1082,7 +1082,7 @@ export default function NewsIntelligencePanel({
       return undefined
     },
     initialPageParam: 0,
-    refetchInterval: isConnected ? false : 120000,
+    refetchInterval: isConnected ? 60000 : 120000,
   })
 
   const clearMutation = useMutation({

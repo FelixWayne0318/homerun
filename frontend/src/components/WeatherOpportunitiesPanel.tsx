@@ -137,7 +137,7 @@ export default function WeatherOpportunitiesPanel({
   const { data: status } = useQuery({
     queryKey: ['weather-workflow-status'],
     queryFn: getWeatherWorkflowStatus,
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const { data: oppData, isLoading: oppsLoading } = useQuery({
@@ -154,7 +154,7 @@ export default function WeatherOpportunitiesPanel({
         offset: currentPage * ITEMS_PER_PAGE,
       })
     },
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const { data: dateData, isLoading: dateBucketsLoading } = useQuery({
@@ -167,7 +167,7 @@ export default function WeatherOpportunitiesPanel({
         max_entry: maxEntryFilter,
         include_report_only: showFiltered,
       }),
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const refreshMutation = useMutation({
@@ -231,7 +231,7 @@ export default function WeatherOpportunitiesPanel({
         offset: 0,
       }),
     enabled: totalOpportunities > 0,
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
   const visibleAnalyzeIds = useMemo(
     () => Array.from(new Set(opportunities.map((opportunity) => opportunity.id))),
