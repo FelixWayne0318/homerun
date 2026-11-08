@@ -286,6 +286,7 @@ ALLOWED_IMPORT_PREFIXES = {
     "services.chainlink_feed",
     "services.fee_model",
     "services.ai",
+    "services.ml",
     "services.strategy_sdk",
     "services.strategy_helpers",
     "services.quality_filter",
