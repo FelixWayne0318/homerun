@@ -2728,7 +2728,7 @@ export default function BacktestStudio({
             Continue action so it never slides off-screen. */}
         {stage === 'setup' ? (
           <div className="flex h-full flex-col">
-            <div className="flex-1 min-h-0 grid grid-cols-12 gap-3 p-4">
+            <div className="flex-1 min-h-0 overflow-y-auto lg:overflow-hidden content-start lg:content-stretch grid grid-cols-12 gap-3 p-4">
               {/* Left column — unified data source selector (3 modes:
                   Auto rolling-window / Recording session / multi-select
                   Datasets).  Replaces the legacy "dataset picker +
