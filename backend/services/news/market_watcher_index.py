@@ -258,6 +258,12 @@ class MarketWatcherIndex:
         self._faiss_index: Optional[object] = None
         self._last_rebuild: Optional[datetime] = None
         self._market_index_hash: Optional[str] = None
+        # Per-market embedding cache so refreshes only encode what changed.
+        # The module contract is "without re-embedding the entire market
+        # universe each time"; without this, a 20k-market catalog forced a
+        # full re-encode on every refresh and never fit the 30s stage budget.
+        self._emb_cache: dict[str, np.ndarray] = {}
+        self._rebuild_inflight: bool = False
 
     # ------------------------------------------------------------------
     # Initialization
@@ -325,9 +331,14 @@ class MarketWatcherIndex:
         return h.hexdigest()
 
     def rebuild(self, markets: list[IndexedMarket]) -> int:
-        """Rebuild the entire index from a list of markets.
+        """Rebuild the index from a list of markets, encoding only the delta.
 
-        Skips the expensive embedding step when the market set is unchanged.
+        The module contract is "pre-indexes all active prediction markets ...
+        without re-embedding the entire market universe each time".  The old
+        implementation re-encoded every market whenever any single market
+        changed; at catalog scale (20k+ markets, refreshed every couple of
+        minutes) that never finished inside the workflow's 30s stage budget,
+        so the index was empty on every cycle and retrieval matched nothing.
         """
         if not self._initialized:
             self.initialize()
@@ -342,72 +353,97 @@ class MarketWatcherIndex:
                 self._last_rebuild = datetime.now(timezone.utc)
             return 0
 
-        # Skip re-embedding when the market set hasn't changed
-        new_hash = self._compute_market_hash(markets)
-        if new_hash == self._market_index_hash and self._embeddings is not None:
-            # Still tokenize keywords (cheap) and update market objects
+        if self._rebuild_inflight:
+            # A previous pass is still encoding (first full pass after a cold
+            # start).  Keep serving the previous index instead of stacking
+            # concurrent full passes on the executor.
+            return len(self._markets)
+
+        self._rebuild_inflight = True
+        try:
+            new_hash = self._compute_market_hash(markets)
+
+            # Tokenize for keyword search (cheap, always refreshed).
             tokens_list = []
             for m in markets:
                 tags_text = " ".join(m.tags or [])
                 text = f"{m.question} {m.event_title} {m.category} {tags_text} {m.slug}"
                 m.keywords = _tokenize(text)
                 tokens_list.append(m.keywords)
+
+            if self._model is not None and markets:
+                missing: list[IndexedMarket] = []
+                missing_texts: list[str] = []
+                for m in markets:
+                    key = f"{m.market_id}|{m.question}"
+                    if self._emb_cache.get(key) is None:
+                        missing.append(m)
+                        missing_texts.append(
+                            f"{m.question} {m.event_title} {m.category} {' '.join(m.tags or [])} {m.slug}"
+                        )
+                try:
+                    if missing_texts:
+                        fresh = np.array(
+                            self._model.encode(
+                                missing_texts,
+                                show_progress_bar=False,
+                                normalize_embeddings=True,
+                            ),
+                            dtype=np.float32,
+                        )
+                        for m, emb in zip(missing, fresh):
+                            self._emb_cache[f"{m.market_id}|{m.question}"] = emb
+
+                    values = [
+                        self._emb_cache.get(f"{m.market_id}|{m.question}") for m in markets
+                    ]
+                    embs = np.array(values, dtype=np.float32) if not any(v is None for v in values) else None
+
+                    if embs is not None and embs.ndim == 2:
+                        if not embs.flags["C_CONTIGUOUS"]:
+                            embs = np.ascontiguousarray(embs, dtype=np.float32)
+                        with self._lock:
+                            self._embeddings = embs
+                            if _HAS_FAISS:
+                                idx = faiss.IndexFlatIP(embs.shape[1])
+                                idx.add(embs)
+                                self._faiss_index = idx
+                            else:
+                                self._faiss_index = None
+                            for market, emb in zip(markets, embs):
+                                market.embedding = emb
+                        if missing_texts:
+                            logger.info(
+                                "Market watcher index: encoded %d new/changed, reused %d",
+                                len(missing_texts),
+                                len(markets) - len(missing_texts),
+                            )
+                    else:
+                        # Cold pass still filling the cache — keyword index only
+                        # for this cycle, semantic search resumes next cycle.
+                        with self._lock:
+                            self._embeddings = None
+                            self._faiss_index = None
+                except Exception as e:
+                    logger.warning("Market embedding failed: %s", e)
+                    with self._lock:
+                        self._embeddings = None
+                        self._faiss_index = None
+            else:
+                with self._lock:
+                    self._embeddings = None
+                    self._faiss_index = None
+
             with self._lock:
                 self._markets = markets
                 self._market_tokens = tokens_list
-            logger.debug(
-                "Market watcher index unchanged (%d markets), skipping re-embed",
-                len(markets),
-            )
+                self._market_index_hash = new_hash
+                self._last_rebuild = datetime.now(timezone.utc)
+
+            logger.info("Market watcher index rebuilt: %d markets", len(markets))
             return len(markets)
-
-        # Tokenize for keyword search
-        tokens_list = []
-        for m in markets:
-            tags_text = " ".join(m.tags or [])
-            text = f"{m.question} {m.event_title} {m.category} {tags_text} {m.slug}"
-            m.keywords = _tokenize(text)
-            tokens_list.append(m.keywords)
-
-        # Embed for semantic search
-        if self._model is not None and markets:
-            texts = [f"{m.question} {m.event_title} {m.category} {' '.join(m.tags or [])} {m.slug}" for m in markets]
-            try:
-                embs = self._model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
-                embs = np.array(embs, dtype=np.float32)
-
-                with self._lock:
-                    self._embeddings = embs
-
-                    if _HAS_FAISS and embs.ndim == 2:
-                        if not embs.flags["C_CONTIGUOUS"]:
-                            embs = np.ascontiguousarray(embs, dtype=np.float32)
-                            self._embeddings = embs
-                        idx = faiss.IndexFlatIP(embs.shape[1])
-                        idx.add(embs)
-                        self._faiss_index = idx
-                    else:
-                        self._faiss_index = None
-
-                    for market, emb in zip(markets, embs):
-                        market.embedding = emb
-            except Exception as e:
-                logger.warning("Market embedding failed: %s", e)
-                self._embeddings = None
-                self._faiss_index = None
-        else:
-            with self._lock:
-                self._embeddings = None
-                self._faiss_index = None
-
-        with self._lock:
-            self._markets = markets
-            self._market_tokens = tokens_list
-            self._market_index_hash = new_hash
-            self._last_rebuild = datetime.now(timezone.utc)
-
-        logger.info("Market watcher index rebuilt: %d markets", len(markets))
-        return len(markets)
+        finally:
+            self._rebuild_inflight = False
 
     # ------------------------------------------------------------------
     # Search

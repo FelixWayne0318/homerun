@@ -1033,7 +1033,24 @@ class WorkflowOrchestrator:
         min_liquidity: float = 500.0,
         max_days_to_resolution: int = 365,
     ) -> list[dict]:
-        """Build market info from live markets with scanner fallback."""
+        """Build market info from the persisted catalog, live markets, then scanner."""
+        # The market_universe worker keeps a full snapshot (tens of thousands of
+        # markets) in market_catalog, refreshed every ~2 minutes.  That local
+        # snapshot is both the widest and the cheapest universe.  Going out to
+        # the paged Polymarket API on every cycle blew the stage budget and
+        # collapsed the universe to the handful of scanner "opportunities",
+        # which no news cluster could match — the reason findings stayed at 0.
+        try:
+            infos = await self._build_market_infos_from_catalog(
+                session,
+                min_liquidity=min_liquidity,
+                max_days_to_resolution=max_days_to_resolution,
+            )
+            if infos:
+                return infos
+        except Exception as exc:
+            logger.warning("Catalog market universe build failed: %s", exc)
+
         try:
             infos = await asyncio.wait_for(
                 self._build_market_infos_from_polymarket(
@@ -1155,6 +1172,112 @@ class WorkflowOrchestrator:
                 }
             )
 
+        return infos
+
+    async def _build_market_infos_from_catalog(
+        self,
+        session: AsyncSession,
+        min_liquidity: float,
+        max_days_to_resolution: int,
+    ) -> list[dict]:
+        """Market universe from the persisted catalog snapshot (widest + local)."""
+        from services import shared_state as catalog_state
+
+        events, markets, metadata = await catalog_state.read_market_catalog(
+            session,
+            include_events=True,
+            include_markets=True,
+        )
+        if not markets:
+            return []
+
+        def _f(obj, key, default=None):
+            if isinstance(obj, dict):
+                return obj.get(key, default)
+            return getattr(obj, key, default)
+
+        event_by_slug: dict[str, dict] = {}
+        market_to_event: dict[str, dict] = {}
+        for event in events or []:
+            slug = str(_f(event, "slug", "") or "")
+            meta = {
+                "event_slug": slug,
+                "event_title": str(_f(event, "title", "") or ""),
+                "category": str(_f(event, "category", "") or ""),
+                "tags": self._normalize_tags(_f(event, "tags", []) or []),
+            }
+            if slug:
+                event_by_slug[slug] = meta
+            for ev_market in _f(event, "markets", []) or []:
+                for key in [
+                    str(_f(ev_market, "id", "") or ""),
+                    str(_f(ev_market, "condition_id", "") or ""),
+                ]:
+                    if key:
+                        market_to_event[key] = meta
+
+        infos: list[dict] = []
+        seen: set[str] = set()
+        now = datetime.now(timezone.utc)
+
+        for market in markets:
+            if not bool(_f(market, "active", True)):
+                continue
+            question = str(_f(market, "question", "") or "").strip()
+            if len(question) < 20:
+                continue
+            liquidity = float(_f(market, "liquidity", 0.0) or 0.0)
+            if liquidity < min_liquidity:
+                continue
+            market_end = self._coerce_datetime(_f(market, "end_date", None))
+            if market_end is not None:
+                if market_end < now:
+                    continue
+                if max_days_to_resolution > 0 and (market_end - now) > timedelta(days=max_days_to_resolution):
+                    continue
+
+            market_id = str(_f(market, "id", "") or "").strip() or str(
+                _f(market, "condition_id", "") or ""
+            ).strip()
+            if not market_id or market_id in seen:
+                continue
+            seen.add(market_id)
+
+            event_slug = str(_f(market, "event_slug", "") or "").strip()
+            event_meta = (
+                event_by_slug.get(event_slug)
+                or market_to_event.get(market_id)
+                or market_to_event.get(str(_f(market, "condition_id", "") or ""))
+                or {}
+            )
+            infos.append(
+                {
+                    "market_id": market_id,
+                    "condition_id": str(_f(market, "condition_id", "") or "").strip(),
+                    "question": question,
+                    "event_title": str(event_meta.get("event_title") or ""),
+                    "event_slug": event_slug or event_meta.get("event_slug"),
+                    "event_ticker": None,
+                    "platform": "polymarket",
+                    "category": str(event_meta.get("category") or ""),
+                    "yes_price": float(_f(market, "yes_price", 0.5) or 0.5),
+                    "no_price": float(_f(market, "no_price", 0.5) or 0.5),
+                    "liquidity": liquidity,
+                    "slug": str(_f(market, "slug", "") or ""),
+                    "token_ids": [str(t) for t in list(_f(market, "clob_token_ids", []) or []) if t],
+                    "end_date": market_end.isoformat() if market_end else None,
+                    "tags": self._normalize_tags(
+                        list(_f(market, "tags", []) or []) + list(event_meta.get("tags", []) or [])
+                    ),
+                }
+            )
+
+        logger.info(
+            "Market universe from catalog: %d markets (catalog has %d, events %d)",
+            len(infos),
+            len(markets),
+            len(events or []),
+        )
         return infos
 
     async def _build_market_infos_from_scanner(

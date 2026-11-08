@@ -243,12 +243,19 @@ class NewsFeedService:
                     return
                 try:
                     rows = await self._fetch_source_rows(source)
+                except asyncio.CancelledError:
+                    raise
                 except Exception as exc:
                     self._inc_ingest_stat("source_fetch_failures")
                     logger.debug("Story source fetch failed for '%s': %s", source.slug, exc)
                     rows = []
                 for row in rows:
-                    article = self._row_to_article(source, row)
+                    try:
+                        article = self._row_to_article(source, row)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        article = None
                     if article is None:
                         self._inc_ingest_stat("source_rows_skipped")
                         continue
@@ -263,7 +270,22 @@ class NewsFeedService:
             for i in range(worker_count)
         ]
         try:
-            await asyncio.gather(*workers, return_exceptions=True)
+            # No return_exceptions here: each worker already absorbs non-fatal
+            # per-source failures, so anything that escapes is a cancellation
+            # that must propagate.  Swallowing it made the caller's
+            # ``wait_for(fetch_all(), timeout=60)`` ineffective — the fetch
+            # kept running in the background for ~460s while the next cycle
+            # started its own fetch, and the workflow's 90s analysis budget
+            # was spent before any cluster could be processed.
+            await asyncio.gather(*workers)
+        except asyncio.CancelledError:
+            # Do not await the workers here: a source stuck on a hung HTTPS
+            # request would make the cancellation itself block forever and
+            # the caller's wait_for timeout would never resolve.
+            for w in workers:
+                if not w.done():
+                    w.cancel()
+            raise
         finally:
             for w in workers:
                 if not w.done():
