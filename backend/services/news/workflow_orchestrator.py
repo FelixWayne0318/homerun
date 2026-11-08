@@ -529,7 +529,40 @@ class WorkflowOrchestrator:
                 cycle_spend_cap = float(wf_settings.get("cycle_spend_cap_usd", 0.25) or 0.25)
                 hourly_spend_cap = float(wf_settings.get("hourly_spend_cap_usd", 2.0) or 2.0)
                 effective_call_cap = cycle_llm_call_cap
-                estimated_cost_per_call = 0.02
+                # Per-call cost estimate has to follow the configured model's real
+                # pricing. A fixed $0.02 over-states cheap models (deepseek-chat
+                # costs ~$0.0004 per news call) by ~50x, so the cycle spend cap
+                # chokes after a dozen calls and downstream stages (reranking,
+                # edge estimation) never run: every finding falls back to
+                # edge_percent = 0 and nothing is ever actionable.
+                _model_name = str(wf_settings.get("model") or usage.get("active_model") or "").strip()
+                _by_model = usage.get("by_model") or {}
+                _model_usage = _by_model.get(_model_name) if isinstance(_by_model, dict) else None
+                if isinstance(_model_usage, dict) and int(_model_usage.get("requests") or 0) >= 20:
+                    # Measured spend per request for this model this month.
+                    estimated_cost_per_call = max(
+                        0.00002,
+                        round(float(_model_usage.get("cost") or 0.0) / int(_model_usage["requests"]), 6),
+                    )
+                else:
+                    try:
+                        from services.ai.llm_provider import PRICING as _LLM_PRICING
+                    except Exception:
+                        _LLM_PRICING = {}
+                    _pricing = _LLM_PRICING.get(_model_name) if _model_name else None
+                    if _pricing is None and _model_name:
+                        for _known, _known_pricing in _LLM_PRICING.items():
+                            if _model_name.startswith(_known):
+                                _pricing = _known_pricing
+                                break
+                    if _pricing is None:
+                        estimated_cost_per_call = 0.02
+                    else:
+                        # Typical news-workflow call: ~1.5k prompt + ~0.5k completion tokens.
+                        estimated_cost_per_call = max(
+                            0.00002,
+                            round((1500 / 1_000_000) * _pricing[0] + (500 / 1_000_000) * _pricing[1], 6),
+                        )
             await self._release_session_connection(session)
 
             budget = CycleBudget(
@@ -540,6 +573,17 @@ class WorkflowOrchestrator:
                 hourly_news_spend_usd=hourly_news_spend,
                 cycle_llm_call_cap=effective_call_cap,
                 estimated_cost_per_call_usd=estimated_cost_per_call,
+            )
+            logger.info(
+                "News cycle LLM budget: model=%s cost_per_call=$%.6f cycle_cap=$%.2f "
+                "hourly_cap=$%.2f hourly_used=$%.4f call_cap=%d local_mode=%s",
+                wf_settings.get("model") or usage.get("active_model") or "<default>",
+                estimated_cost_per_call,
+                cycle_spend_cap,
+                hourly_spend_cap,
+                hourly_news_spend,
+                effective_call_cap,
+                local_model_mode,
             )
 
             # 5) Event extraction with adaptive LLM usage.

@@ -57,12 +57,16 @@ async def _run_loop() -> None:
     except Exception as exc:
         logger.warning("Weather worker strategy startup sync failed: %s", exc)
 
-    # Ensure initial snapshot exists for UI status.
+    # Ensure initial snapshot exists for UI status. Keep the previous scan's
+    # opportunities: overwriting them with [] on every restart blanked the
+    # weather panel until the next scan (WEATHER_WORKFLOW_SCAN_INTERVAL_SECONDS
+    # is 4h by default), which made the panel read a permanently stale 0.
     try:
         async with AsyncSessionLocal() as session:
+            existing_opportunities, _ = await shared_state.read_weather_snapshot(session)
             await shared_state.write_weather_snapshot(
                 session,
-                opportunities=[],
+                opportunities=existing_opportunities,
                 status={
                     "running": True,
                     "enabled": True,

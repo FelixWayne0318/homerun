@@ -989,7 +989,7 @@ function App() {
         offset: 0,
       }),
     enabled: activeTab === 'opportunities',
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const workerHealth = useMemo(() => {
@@ -1360,7 +1360,7 @@ function App() {
       limit: 1,
     }),
     enabled: activeTab === 'opportunities',
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const { data: weatherWorkflowExecutableCount } = useQuery({
@@ -1371,14 +1371,14 @@ function App() {
       offset: 0,
     }),
     enabled: activeTab === 'opportunities',
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const { data: cryptoMarketCounts } = useQuery({
     queryKey: ['crypto-markets-count'],
     queryFn: () => getCryptoMarkets({ viewer_active: false }),
     enabled: activeTab === 'opportunities',
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const { data: sportsOpportunityCountData } = useQuery({
@@ -1390,7 +1390,7 @@ function App() {
         offset: 0,
       }),
     enabled: activeTab === 'opportunities',
-    refetchInterval: isConnected ? false : 30000,
+    refetchInterval: isConnected ? 60000 : 30000,
   })
 
   const tradersCount = tradersOpportunityCountData?.total ?? trackedTradersExecutableCount ?? 0
