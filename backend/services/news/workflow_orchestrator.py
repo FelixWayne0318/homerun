@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 # Single-thread executor for CPU-bound embedding/index work.
 _EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="news_wf")
 _MAX_WORKFLOW_CYCLE_SECONDS = 90.0
+# Stage-2 budget for the live market universe.  Polymarket's keyset pager runs
+# several pages behind a token bucket, each page allowing 30s of transport plus
+# retries, so without a stage cap the whole cycle can hang on it and the
+# documented "scanner snapshot fallback" never gets a chance to fire.
+_MARKET_UNIVERSE_TIMEOUT_SECONDS = 30.0
 _DB_DISCONNECT_MARKERS = (
     "connection is closed",
     "underlying connection is closed",
@@ -1030,12 +1035,20 @@ class WorkflowOrchestrator:
     ) -> list[dict]:
         """Build market info from live markets with scanner fallback."""
         try:
-            infos = await self._build_market_infos_from_polymarket(
-                min_liquidity=min_liquidity,
-                max_days_to_resolution=max_days_to_resolution,
+            infos = await asyncio.wait_for(
+                self._build_market_infos_from_polymarket(
+                    min_liquidity=min_liquidity,
+                    max_days_to_resolution=max_days_to_resolution,
+                ),
+                timeout=_MARKET_UNIVERSE_TIMEOUT_SECONDS,
             )
             if infos:
                 return infos
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Live market universe build exceeded %.0fs; falling back to scanner snapshot",
+                _MARKET_UNIVERSE_TIMEOUT_SECONDS,
+            )
         except Exception as exc:
             logger.warning("Live market universe build failed: %s", exc)
         logger.warning("Falling back to scanner snapshot for market universe")
