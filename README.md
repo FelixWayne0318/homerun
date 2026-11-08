@@ -62,6 +62,8 @@ Built-in strategies spanning every edge in prediction markets:
 
 Every strategy is a DB-managed Python class. Edit in the UI, validate, backtest, enable — hot-reloaded in seconds.
 
+Enabling a strategy does not place any trades. The trading unit is a **trader**: create one, bind it to exactly one source and strategy, and make sure the orchestrator's kill switch is off. With no trader the orchestrator keeps cycling but processes zero signals.
+
 ### Data Source Engine
 
 ![Global Event Map — Data Sources](./screenshots/map.png)

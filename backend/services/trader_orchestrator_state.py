@@ -4434,7 +4434,7 @@ def compose_orchestrator_runtime_state(
     if desired_active and kill_switch:
         state = "blocked"
         label = "BLOCKED"
-        reason = "Kill switch is blocking live order placement."
+        reason = "Kill switch is blocking all new entries, including shadow trading."
     elif desired_active and worker_stale:
         state = "stale"
         label = "STALE"
