@@ -5285,6 +5285,7 @@
     "emptyDescription": "ボットは取引の実行単位です。ボットを作成して取引を開始してください。",
     "emptyCreateButton": "最初のボットを作成",
     "statusRunning": "実行中",
+    "statusEngineBlocked": "緊急停止で遮断",
     "statusEngineStopped": "エンジン停止",
     "statusBotStopped": "ボット停止",
     "statusInactive": "非アクティブ",

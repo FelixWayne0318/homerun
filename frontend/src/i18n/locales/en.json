@@ -5286,6 +5286,7 @@
     "emptyDescription": "A bot is the execution unit. Create one to start trading.",
     "emptyCreateButton": "Create your first bot",
     "statusRunning": "Running",
+    "statusEngineBlocked": "Engine Blocked",
     "statusEngineStopped": "Engine Stopped",
     "statusBotStopped": "Bot Stopped",
     "statusInactive": "Inactive",

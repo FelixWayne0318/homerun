@@ -403,7 +403,7 @@ type BotMarketModalState = {
   scope: BotMarketModalScope
 }
 
-type TraderRuntimeStatus = 'running' | 'engine_stopped' | 'bot_stopped' | 'inactive'
+type TraderRuntimeStatus = 'running' | 'engine_blocked' | 'engine_stopped' | 'bot_stopped' | 'inactive'
 
 type TraderStatusPresentation = {
   key: TraderRuntimeStatus
@@ -1650,7 +1650,8 @@ function isTraderActive(
 
 function resolveTraderStatusPresentation(
   trader: Pick<Trader, 'is_enabled' | 'is_paused'> | null | undefined,
-  orchestratorExecutionActive: boolean
+  orchestratorExecutionActive: boolean,
+  orchestratorBlocked = false
 ): TraderStatusPresentation {
   if (!isTraderActive(trader)) {
     return {
@@ -1673,6 +1674,15 @@ function resolveTraderStatusPresentation(
   }
 
   if (!orchestratorExecutionActive) {
+    if (orchestratorBlocked) {
+      return {
+        key: 'engine_blocked',
+        label: 'Engine Blocked',
+        dotClassName: 'bg-red-500',
+        badgeVariant: 'outline',
+        badgeClassName: 'border-red-500/35 bg-red-500/10 text-red-300',
+      }
+    }
     return {
       key: 'engine_stopped',
       label: 'Engine Stopped',
@@ -9100,7 +9110,7 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
 
   const botRosterRows = useMemo(() => {
     return traders.map((trader) => {
-      const status = resolveTraderStatusPresentation(trader, orchestratorRunning)
+      const status = resolveTraderStatusPresentation(trader, orchestratorRunning, orchestratorBlocked)
       const sourceKeys = traderSourceKeys(trader)
       const sourceLabels = sourceKeys.map((sourceKey) => sourceLabelByKey[sourceKey] || sourceKey.toUpperCase())
       const performance = traderPerformanceById.get(trader.id)
@@ -9122,7 +9132,7 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
         isInactive: !isTraderActive(trader),
       }
     })
-  }, [orchestratorRunning, sourceLabelByKey, traderPerformanceById, traders])
+  }, [orchestratorRunning, orchestratorBlocked, sourceLabelByKey, traderPerformanceById, traders])
 
   // "All Bots" header sums only the bots in the roster, so it always matches
   // the rows below. globalSummary.resolvedPnl can include orders whose
@@ -9514,7 +9524,7 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
       : 'Entry-capable running bots.'
   )
   const displayAvgEdge = normalizeEdgePercent(globalSummary.avgEdge)
-  const selectedTraderStatus = resolveTraderStatusPresentation(selectedTrader, orchestratorRunning)
+  const selectedTraderStatus = resolveTraderStatusPresentation(selectedTrader, orchestratorRunning, orchestratorBlocked)
   const selectedTraderPendingAction = selectedTrader
     ? traderTogglePendingById[selectedTrader.id] || null
     : null
@@ -10845,7 +10855,7 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
                                 )
                               ) : (
                                 allBotsLeaderboardWithTrend.map((row) => {
-                                  const traderStatus = resolveTraderStatusPresentation(row.trader, orchestratorRunning)
+                                  const traderStatus = resolveTraderStatusPresentation(row.trader, orchestratorRunning, orchestratorBlocked)
                                   return (
                                     <button
                                       key={row.trader.id}

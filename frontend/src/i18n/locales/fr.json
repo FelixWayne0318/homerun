@@ -5285,6 +5285,7 @@
     "emptyDescription": "Le bot est l'unité d'exécution. Créez-en un pour commencer à trader.",
     "emptyCreateButton": "Créer votre premier bot",
     "statusRunning": "En cours",
+    "statusEngineBlocked": "Moteur Bloqué",
     "statusEngineStopped": "Moteur Arrêté",
     "statusBotStopped": "Bot Arrêté",
     "statusInactive": "Inactif",

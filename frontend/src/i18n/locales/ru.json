@@ -5285,6 +5285,7 @@
     "emptyDescription": "Бот — это единица исполнения. Создайте бота, чтобы начать торговлю.",
     "emptyCreateButton": "Создать первого бота",
     "statusRunning": "Выполняется",
+    "statusEngineBlocked": "Движок заблокирован",
     "statusEngineStopped": "Движок остановлен",
     "statusBotStopped": "Бот остановлен",
     "statusInactive": "Неактивен",

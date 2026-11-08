@@ -113,9 +113,10 @@ function BotRosterPanelImpl({
       if (groupBy === 'status') {
         key = row.status.key
         if (row.status.key === 'running') { label = t('botRosterPanel.statusRunning'); order = 0 }
-        else if (row.status.key === 'engine_stopped') { label = t('botRosterPanel.statusEngineStopped'); order = 1 }
-        else if (row.status.key === 'bot_stopped') { label = t('botRosterPanel.statusBotStopped'); order = 2 }
-        else { label = t('botRosterPanel.statusInactive'); order = 3 }
+        else if (row.status.key === 'engine_blocked') { label = t('botRosterPanel.statusEngineBlocked'); order = 1 }
+        else if (row.status.key === 'engine_stopped') { label = t('botRosterPanel.statusEngineStopped'); order = 2 }
+        else if (row.status.key === 'bot_stopped') { label = t('botRosterPanel.statusBotStopped'); order = 3 }
+        else { label = t('botRosterPanel.statusInactive'); order = 4 }
       } else {
         key = row.primarySourceKey
         if (key === 'multi') { label = t('botRosterPanel.groupMultiSource'); order = sourceGroupOrderByKey.size + 1 }

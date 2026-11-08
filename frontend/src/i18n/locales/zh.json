@@ -5285,6 +5285,7 @@
     "emptyDescription": "机器人是交易的执行单位。创建一个机器人来开始交易。",
     "emptyCreateButton": "创建第一个机器人",
     "statusRunning": "运行中",
+    "statusEngineBlocked": "急停阻断",
     "statusEngineStopped": "引擎已停止",
     "statusBotStopped": "机器人已停止",
     "statusInactive": "非活动",

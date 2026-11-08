@@ -5285,6 +5285,7 @@
     "emptyDescription": "O bot é a unidade de execução. Crie um para começar a operar.",
     "emptyCreateButton": "Criar seu primeiro bot",
     "statusRunning": "Em execução",
+    "statusEngineBlocked": "Motor Bloqueado",
     "statusEngineStopped": "Motor Parado",
     "statusBotStopped": "Bot Parado",
     "statusInactive": "Inativo",

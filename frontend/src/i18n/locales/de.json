@@ -5285,6 +5285,7 @@
     "emptyDescription": "Ein Bot ist die Ausführungseinheit. Erstelle einen, um mit dem Handel zu beginnen.",
     "emptyCreateButton": "Ersten Bot erstellen",
     "statusRunning": "Läuft",
+    "statusEngineBlocked": "Durch Not-Aus blockiert",
     "statusEngineStopped": "Engine gestoppt",
     "statusBotStopped": "Bot gestoppt",
     "statusInactive": "Inaktiv",

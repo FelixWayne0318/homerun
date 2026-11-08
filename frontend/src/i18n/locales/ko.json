@@ -5285,6 +5285,7 @@
     "emptyDescription": "봇은 거래의 실행 단위입니다. 봇을 만들어 거래를 시작하세요.",
     "emptyCreateButton": "첫 봇 만들기",
     "statusRunning": "실행 중",
+    "statusEngineBlocked": "비상 정지로 차단",
     "statusEngineStopped": "엔진 중지됨",
     "statusBotStopped": "봇 중지됨",
     "statusInactive": "비활성",
