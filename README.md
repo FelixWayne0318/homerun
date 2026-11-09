@@ -25,6 +25,8 @@
 
 ![Homerun Dashboard — Market Scanner](./screenshots/dashboard-scanner.png)
 
+> 中文用户：先读 [使用教程（小白版）](docs/使用教程-小白版.md)，从启动、沙盒下单到回测和故障处理都有分步说明。
+
 ## Why Homerun
 
 Most trading bots give you a toy DSL and a rigid pipeline. Homerun gives you **full Python** and gets out of your way.
