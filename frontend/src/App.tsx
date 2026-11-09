@@ -366,16 +366,6 @@ function resolveWorkerHealth(worker?: WorkerStatus): {
       ? Boolean(control.is_enabled)
       : Boolean(worker.enabled)
   const running = Boolean(worker.running)
-  const activity = String(worker.current_activity || '').trim()
-  const activityKey = activity.toLowerCase()
-  const activeHint =
-    activityKey.length > 0
-    && !activityKey.startsWith('idle')
-    && !activityKey.startsWith('paused')
-    && !activityKey.startsWith('disabled')
-    && !activityKey.startsWith('stopped')
-    && !activityKey.startsWith('waiting')
-    && !activityKey.startsWith('blocked')
   const lastError = String(worker.last_error || '').trim()
 
   if (lastError) {
@@ -388,7 +378,7 @@ function resolveWorkerHealth(worker?: WorkerStatus): {
       detail: String(worker.current_activity || 'Paused by operator'),
     }
   }
-  if (running || (enabled && !paused && activeHint)) {
+  if (running) {
     return {
       state: 'RUNNING',
       tone: 'green',
