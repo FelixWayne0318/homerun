@@ -2909,9 +2909,16 @@ export default function WorldMap({ isConnected = true }: { isConnected?: boolean
     })
 
     map.on('error', (evt: unknown) => {
-      const errorEvent = evt as { error?: { message?: string } }
+      const errorEvent = evt as { error?: { message?: string }; sourceId?: string }
       const message = errorEvent.error?.message || 'Map runtime error'
-      if (!mapReadyRef.current) {
+      // A basemap tile that cannot be fetched (proxy interception, offline, or a
+      // blocked CDN) must not be reported as a map initialization failure: the
+      // background layer plus every intel layer (signals, hotspots, tensions,
+      // convergences) still render without it.
+      const isTileIssue =
+        errorEvent.sourceId === 'osm-tiles' ||
+        /tile|Failed to fetch|NetworkError|ERR_|server responded with/i.test(message)
+      if (!mapReadyRef.current && !isTileIssue) {
         setMapInitError(message)
       }
       console.warn('[WorldMap]', message)
