@@ -29,21 +29,32 @@ import {
 } from '../lib/worldCountries'
 import { themeAtom } from '../store/atoms'
 
+// Basemap host is configurable for the same reason the other VITE_WORLD_MAP_*
+// knobs exist: a restricted network (proxy fake-ip, blocked CDN) can make the
+// CARTO tiles unreachable while the intel layers work fine. Defaults stay on
+// CARTO so nothing changes for deployments where it is reachable.
+const MAP_TILE_URL_DARK = String(import.meta.env.VITE_MAP_TILE_URL || '').trim()
+const MAP_TILE_URL_LIGHT = String(import.meta.env.VITE_MAP_TILE_URL_LIGHT || '').trim()
+
 const DARK_TILE_STYLE = {
-  tiles: [
-    'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-    'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-    'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
-  ],
+  tiles: MAP_TILE_URL_DARK
+    ? [MAP_TILE_URL_DARK]
+    : [
+        'https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+        'https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+        'https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}@2x.png',
+      ],
   background: '#0a0e17',
 }
 
 const LIGHT_TILE_STYLE = {
-  tiles: [
-    'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
-    'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
-    'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
-  ],
+  tiles: MAP_TILE_URL_LIGHT
+    ? [MAP_TILE_URL_LIGHT]
+    : [
+        'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
+        'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
+        'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png',
+      ],
   background: '#f8fafc',
 }
 
@@ -325,6 +336,9 @@ function useStickyValue<T>(value: T | null | undefined, initialValue: T): [T, bo
 
 function buildStyle(theme: 'dark' | 'light'): maplibregl.StyleSpecification {
   const tileStyle = theme === 'light' ? LIGHT_TILE_STYLE : DARK_TILE_STYLE
+  // An override usually points at a light basemap (OSM etc.), so darken it in
+  // the dark theme to keep the same contrast against the intel layers.
+  const dimOverriddenDark = theme === 'dark' && Boolean(MAP_TILE_URL_DARK)
   return {
     version: 8,
     name: `world-${theme}`,
@@ -347,7 +361,15 @@ function buildStyle(theme: 'dark' | 'light'): maplibregl.StyleSpecification {
         id: 'osm-tiles',
         type: 'raster',
         source: 'osm-tiles',
-        paint: { 'raster-opacity': 0.9 },
+        paint: dimOverriddenDark
+          ? {
+              'raster-opacity': 0.9,
+              'raster-brightness-max': 0.58,
+              'raster-brightness-min': 0.0,
+              'raster-contrast': 0.35,
+              'raster-saturation': -0.25,
+            }
+          : { 'raster-opacity': 0.9 },
       },
     ],
   } as maplibregl.StyleSpecification
