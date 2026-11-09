@@ -607,6 +607,14 @@ class WalletDiscoveryEngine:
                 stats["min_roi"] = min(fifo_market_rois)
                 stats["roi_std"] = self._std_dev(fifo_market_rois) if len(fifo_market_rois) > 1 else 0.0
 
+        # FIFO paired PnL is the figure that matches the ROI denominator
+        # (closed-lot cost basis), so it must drive the headline PnL too.
+        # The raw cash-flow difference used before double-counted cost basis
+        # of positions that were still open.
+        stats["realized_pnl"] = total_realized
+        stats["total_pnl"] = total_realized + float(stats.get("unrealized_pnl") or 0.0)
+        stats["total_cost_basis"] = total_cost_basis
+
         stats["fifo_realized_pnl"] = total_realized
         stats["fifo_closed_lots"] = total_closed_lots
         stats["fifo_open_lots"] = sum(len(r.open_lots) for r in fifo_results.values())
@@ -946,8 +954,9 @@ class WalletDiscoveryEngine:
         if std_return > 0:
             result["sharpe_ratio"] = mean_return / std_return
         else:
-            # Perfect consistency: infinite Sharpe in theory; cap to a large value
-            result["sharpe_ratio"] = float("inf") if mean_return > 0 else 0.0
+            # Zero variance: Sharpe is undefined rather than infinitely good.
+            # Return None so the UI renders "--" instead of a sentinel number.
+            result["sharpe_ratio"] = None
 
         # ---- Sortino Ratio ----
         # (mean_return - risk_free_rate) / downside_deviation
@@ -958,10 +967,10 @@ class WalletDiscoveryEngine:
             if downside_deviation > 0:
                 result["sortino_ratio"] = mean_return / downside_deviation
             else:
-                result["sortino_ratio"] = float("inf") if mean_return > 0 else 0.0
+                result["sortino_ratio"] = None
         else:
-            # No negative returns at all
-            result["sortino_ratio"] = float("inf") if mean_return > 0 else 0.0
+            # No negative returns at all: downside risk is undefined, not zero.
+            result["sortino_ratio"] = None
 
         # ---- Max Drawdown ----
         # Largest peak-to-trough decline in cumulative PnL series.
@@ -997,7 +1006,8 @@ class WalletDiscoveryEngine:
         if gross_loss < 0:
             result["profit_factor"] = gross_profit / abs(gross_loss)
         elif gross_profit > 0:
-            result["profit_factor"] = float("inf")
+            # No losing side: profit factor is undefined, not infinite.
+            result["profit_factor"] = None
         else:
             result["profit_factor"] = 0.0
 
@@ -1056,9 +1066,10 @@ class WalletDiscoveryEngine:
             rolling_win_rate[label] = stats["win_rate"]
             rolling_trade_count[label] = stats["total_trades"]
 
-            # Window Sharpe
+            # Window Sharpe uses the capital-weighted ROI as the numerator,
+            # matching the headline avg_roi instead of an unweighted market mean.
             if len(rois) >= 2:
-                mean_r = sum(rois) / len(rois)
+                mean_r = float(stats.get("avg_roi") or 0.0)
                 std_r = self._std_dev(rois)
                 rolling_sharpe[label] = (mean_r / std_r) if std_r > 0 else None
             else:

@@ -403,7 +403,7 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
         if std_return > 0:
             result["sharpe_ratio"] = mean_return / std_return
         else:
-            result["sharpe_ratio"] = float("inf") if mean_return > 0 else 0.0
+            result["sharpe_ratio"] = None
 
         # -- Sortino Ratio --
         negative_returns = [r for r in market_rois if r < 0]
@@ -413,9 +413,9 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
             if downside_deviation > 0:
                 result["sortino_ratio"] = mean_return / downside_deviation
             else:
-                result["sortino_ratio"] = float("inf") if mean_return > 0 else 0.0
+                result["sortino_ratio"] = None
         else:
-            result["sortino_ratio"] = float("inf") if mean_return > 0 else 0.0
+            result["sortino_ratio"] = None
 
         # -- Max Drawdown --
         # Largest peak-to-trough decline in cumulative PnL
@@ -446,7 +446,7 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
         if gross_loss < 0:
             result["profit_factor"] = gross_profit / abs(gross_loss)
         elif gross_profit > 0:
-            result["profit_factor"] = float("inf")
+            result["profit_factor"] = None
         else:
             result["profit_factor"] = 0.0
 
