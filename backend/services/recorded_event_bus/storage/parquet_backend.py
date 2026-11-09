@@ -314,6 +314,23 @@ async def _flush_once(*, drain_all: bool = False) -> int:
         return n_written
 
 
+def _payload_json_default(value: Any) -> Any:
+    """Coerce payload values that ``json`` cannot encode natively.
+
+    Payloads carry envelopes from many producers, and some of them include
+    ``datetime`` objects (e.g. the news workflow cycle summary).  Without a
+    default encoder ``json.dumps`` raises, the whole batch is dropped and the
+    audit row is lost, so encode those deterministically instead of failing.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, (bytes, bytearray)):
+        return value.decode("utf-8", "replace")
+    if isinstance(value, (set, frozenset)):
+        return list(value)
+    return str(value)
+
+
 def _write_parquet_batch(
     *,
     storage_uri: str,
@@ -341,7 +358,7 @@ def _write_parquet_batch(
         "source":         [e.source for e in events],
         "sequence":       [e.sequence for e in events],
         "schema_version": [e.schema_version for e in events],
-        "payload_json":   [json.dumps(dict(e.payload), separators=(",", ":")) for e in events],
+        "payload_json":   [json.dumps(dict(e.payload), separators=(",", ":"), default=_payload_json_default) for e in events],
     }
     table = pa.table(rows, schema=RECORDED_EVENT_SCHEMA)
     # Atomic-ish: write to .tmp then rename so a concurrent reader

@@ -70,6 +70,21 @@ def _is_db_disconnect_error(exc: Exception) -> bool:
     return any(marker in orig_msg or marker in full_msg for marker in _DB_DISCONNECT_MARKERS)
 
 
+def _float_setting(settings_map: dict, key: str, default: float) -> float:
+    """Read a numeric workflow setting, treating an explicit 0 as meaningful.
+
+    Settings that are absent, null, or unparsable fall back to the designed
+    default instead of silently disabling the gate.
+    """
+    value = settings_map.get(key)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class CycleBudget:
     """LLM budget guardrails for one workflow cycle.
@@ -498,12 +513,28 @@ class WorkflowOrchestrator:
                 # cycle with no findings at all.  Reuse the existing index when
                 # the market set has not changed; the rebuild only needs the
                 # longer ceiling when it actually has work to do.
-                if getattr(market_watcher_index, "_indexed_market_count", None) != len(indexed_markets):
+                # The market set shifts by a handful of rows on every scan, so
+                # comparing the exact count rebuilt the whole ~19k-document index
+                # each cycle (60s out of a 90s budget) and starved the edge
+                # stage until every finding was rejected as "llm_budget_exhausted".
+                # Rebuild only when the set moves materially or the index ages out.
+                prev_count = getattr(market_watcher_index, "_indexed_market_count", None)
+                prev_built_at = getattr(market_watcher_index, "_indexed_built_at", None)
+                index_now = utcnow()
+                market_count = len(indexed_markets)
+                needs_rebuild = (
+                    not prev_count
+                    or abs(market_count - prev_count) / max(prev_count, 1) > 0.10
+                    or prev_built_at is None
+                    or (index_now - prev_built_at) >= timedelta(minutes=15)
+                )
+                if needs_rebuild:
                     await asyncio.wait_for(
                         loop.run_in_executor(_EMBED_EXECUTOR, market_watcher_index.rebuild, indexed_markets),
                         timeout=240,
                     )
-                    setattr(market_watcher_index, "_indexed_market_count", len(indexed_markets))
+                    setattr(market_watcher_index, "_indexed_market_count", market_count)
+                    setattr(market_watcher_index, "_indexed_built_at", index_now)
             except Exception as exc:
                 logger.warning("Market watcher index init/rebuild failed (continuing without ML): %s", exc, exc_info=exc)
 
@@ -665,11 +696,13 @@ class WorkflowOrchestrator:
             # min_semantic_signal: 0.05 lets through candidates with partial
             # semantic overlap; the reranker handles false positives.
             min_semantic_signal = float(wf_settings.get("min_semantic_signal", 0.05) or 0.05)
-            # Trade/business gating is strategy-owned (news_edge on_event config).
-            # Keep workflow thresholds permissive so strategies decide.
-            min_edge = 0.0
-            min_conf = 0.0
-            orchestrator_min_edge = 0.0
+            # Thresholds are configured, not hardcoded: the estimator's own
+            # defaults (8% edge, 0.6 confidence) and the intent generator's
+            # 10% minimum are the designed gate, so passing 0.0 here was
+            # silently disabling every threshold shown in Settings.
+            min_edge = _float_setting(wf_settings, "min_edge_percent", 8.0)
+            min_conf = _float_setting(wf_settings, "min_confidence", 0.6)
+            orchestrator_min_edge = _float_setting(wf_settings, "orchestrator_min_edge", 10.0)
             require_verifier = False
             require_second_source = False
             min_supporting_articles = 1
