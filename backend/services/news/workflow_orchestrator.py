@@ -37,7 +37,12 @@ logger = logging.getLogger(__name__)
 
 # Single-thread executor for CPU-bound embedding/index work.
 _EMBED_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="news_wf")
-_MAX_WORKFLOW_CYCLE_SECONDS = 90.0
+# A full cycle has to fetch articles, embed/rebuild the market index (up to ~2
+# minutes on a cold index), rerank and then spend its LLM budget on edge
+# estimates.  The worker schedules the next run `interval` seconds AFTER the
+# previous one completes, so a longer ceiling does not overlap cycles — it only
+# stopped the edge stage from being cut off at 2-3 calls per cycle.
+_MAX_WORKFLOW_CYCLE_SECONDS = 180.0
 # Stage-2 budget for the live market universe.  Polymarket's keyset pager runs
 # several pages behind a token bucket, each page allowing 30s of transport plus
 # retries, so without a stage cap the whole cycle can hang on it and the
