@@ -83,126 +83,6 @@ async def list_all_topics(
     return [_to_response(s) for s in specs]
 
 
-@router.get("/{slug:path}", response_model=TopicResponse)
-async def get_one_topic(slug: str) -> TopicResponse:
-    spec = await get_topic(slug)
-    if spec is None:
-        raise HTTPException(status_code=404, detail=f"topic {slug!r} not registered")
-    return _to_response(spec)
-
-
-class TopicCreateRequest(BaseModel):
-    slug: str
-    title: str
-    storage_kind: str  # 'parquet' | 'sql_table' | 'memory'
-    storage_uri: Optional[str] = None
-    description: Optional[str] = None
-    payload_schema: Optional[dict[str, Any]] = None
-    schema_version: int = 1
-    retention_days: Optional[int] = None
-    publishers: list[str] = Field(default_factory=list)
-    subscribers: list[str] = Field(default_factory=list)
-    enabled: bool = True
-    is_replayable: bool = True
-
-
-@router.post("", response_model=TopicResponse)
-async def create_topic(req: TopicCreateRequest) -> TopicResponse:
-    try:
-        parse_topic(req.slug)
-    except EnvelopeValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        spec = await register_topic(
-            slug=req.slug,
-            title=req.title,
-            description=req.description,
-            storage_kind=req.storage_kind,
-            storage_uri=req.storage_uri,
-            payload_schema=req.payload_schema,
-            schema_version=req.schema_version,
-            retention_days=req.retention_days,
-            publishers=req.publishers,
-            subscribers=req.subscribers,
-            enabled=req.enabled,
-            is_replayable=req.is_replayable,
-            upsert=True,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _to_response(spec)
-
-
-class TopicPatchRequest(BaseModel):
-    """Partial update.  Fields left None are not changed.  Used by the
-    Data Lab UI to flip ``enabled``, set ``retention_days``, or set
-    ``max_bytes`` without re-specifying the whole topic."""
-    enabled: Optional[bool] = None
-    is_replayable: Optional[bool] = None
-    retention_days: Optional[int] = Field(None, ge=0)
-    max_bytes: Optional[int] = Field(None, ge=0)
-    description: Optional[str] = None
-    # 0 / "" → null on the way through (UI uses 0 / empty for "no cap")
-    # When ``max_bytes`` or ``retention_days`` is 0, we treat as "clear
-    # the cap" (set to NULL).
-
-
-@router.patch("/{slug:path}", response_model=TopicResponse)
-async def patch_topic(slug: str, req: TopicPatchRequest) -> TopicResponse:
-    """Per-topic settings update.
-
-    Operator use cases this enables from the Data Lab UI:
-      * Toggle a topic on/off (``enabled=False`` makes ``bus.publish``
-        fail-closed for it; replay still works for historical data).
-      * Set / clear a retention age cap (in days).
-      * Set / clear a hard size cap (in bytes).
-      * Mark a topic non-replayable (e.g. operator decided this
-        topic's data is too sensitive for backtest replay).
-
-    Fields left None aren't touched.  Set ``retention_days=0`` or
-    ``max_bytes=0`` to explicitly clear an existing cap (the patch
-    treats 0 as null).
-    """
-    from sqlalchemy import select
-    from models.database import AsyncSessionLocal, TopicCatalog
-    from services.recorded_event_bus.catalog import _invalidate_cache
-
-    async with AsyncSessionLocal() as session:
-        row = (
-            await session.execute(
-                select(TopicCatalog).where(TopicCatalog.slug == slug)
-            )
-        ).scalar_one_or_none()
-        if row is None:
-            raise HTTPException(status_code=404, detail=f"topic {slug!r} not registered")
-        if req.enabled is not None:
-            row.enabled = bool(req.enabled)
-        if req.is_replayable is not None:
-            row.is_replayable = bool(req.is_replayable)
-        if req.retention_days is not None:
-            row.retention_days = int(req.retention_days) if req.retention_days > 0 else None
-        if req.max_bytes is not None:
-            row.max_bytes = int(req.max_bytes) if req.max_bytes > 0 else None
-        if req.description is not None:
-            row.description = req.description
-        await session.commit()
-        _invalidate_cache(slug)
-        from services.recorded_event_bus.catalog import TopicSpec
-        spec = TopicSpec.from_row(row)
-    return _to_response(spec)
-
-
-@router.delete("/{slug:path}")
-async def remove_topic(slug: str) -> dict[str, Any]:
-    deleted = await delete_topic(slug)
-    if not deleted:
-        raise HTTPException(status_code=404, detail=f"topic {slug!r} not registered")
-    return {"deleted": True, "slug": slug}
-
-
-# ─── Global rotation controls ────────────────────────────────────────
-
-
 class BusSettingsResponse(BaseModel):
     pruner_enabled: bool
     global_max_bytes: Optional[int] = None
@@ -327,3 +207,121 @@ async def replay_preview(req: TopicReplayPreviewRequest) -> dict[str, Any]:
         "truncated": n_total >= req.limit * 4,
         "samples": samples,
     }
+@router.get("/{slug:path}", response_model=TopicResponse)
+async def get_one_topic(slug: str) -> TopicResponse:
+    spec = await get_topic(slug)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"topic {slug!r} not registered")
+    return _to_response(spec)
+
+
+class TopicCreateRequest(BaseModel):
+    slug: str
+    title: str
+    storage_kind: str  # 'parquet' | 'sql_table' | 'memory'
+    storage_uri: Optional[str] = None
+    description: Optional[str] = None
+    payload_schema: Optional[dict[str, Any]] = None
+    schema_version: int = 1
+    retention_days: Optional[int] = None
+    publishers: list[str] = Field(default_factory=list)
+    subscribers: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    is_replayable: bool = True
+
+
+@router.post("", response_model=TopicResponse)
+async def create_topic(req: TopicCreateRequest) -> TopicResponse:
+    try:
+        parse_topic(req.slug)
+    except EnvelopeValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        spec = await register_topic(
+            slug=req.slug,
+            title=req.title,
+            description=req.description,
+            storage_kind=req.storage_kind,
+            storage_uri=req.storage_uri,
+            payload_schema=req.payload_schema,
+            schema_version=req.schema_version,
+            retention_days=req.retention_days,
+            publishers=req.publishers,
+            subscribers=req.subscribers,
+            enabled=req.enabled,
+            is_replayable=req.is_replayable,
+            upsert=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _to_response(spec)
+
+
+class TopicPatchRequest(BaseModel):
+    """Partial update.  Fields left None are not changed.  Used by the
+    Data Lab UI to flip ``enabled``, set ``retention_days``, or set
+    ``max_bytes`` without re-specifying the whole topic."""
+    enabled: Optional[bool] = None
+    is_replayable: Optional[bool] = None
+    retention_days: Optional[int] = Field(None, ge=0)
+    max_bytes: Optional[int] = Field(None, ge=0)
+    description: Optional[str] = None
+    # 0 / "" → null on the way through (UI uses 0 / empty for "no cap")
+    # When ``max_bytes`` or ``retention_days`` is 0, we treat as "clear
+    # the cap" (set to NULL).
+
+
+@router.patch("/{slug:path}", response_model=TopicResponse)
+async def patch_topic(slug: str, req: TopicPatchRequest) -> TopicResponse:
+    """Per-topic settings update.
+
+    Operator use cases this enables from the Data Lab UI:
+      * Toggle a topic on/off (``enabled=False`` makes ``bus.publish``
+        fail-closed for it; replay still works for historical data).
+      * Set / clear a retention age cap (in days).
+      * Set / clear a hard size cap (in bytes).
+      * Mark a topic non-replayable (e.g. operator decided this
+        topic's data is too sensitive for backtest replay).
+
+    Fields left None aren't touched.  Set ``retention_days=0`` or
+    ``max_bytes=0`` to explicitly clear an existing cap (the patch
+    treats 0 as null).
+    """
+    from sqlalchemy import select
+    from models.database import AsyncSessionLocal, TopicCatalog
+    from services.recorded_event_bus.catalog import _invalidate_cache
+
+    async with AsyncSessionLocal() as session:
+        row = (
+            await session.execute(
+                select(TopicCatalog).where(TopicCatalog.slug == slug)
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"topic {slug!r} not registered")
+        if req.enabled is not None:
+            row.enabled = bool(req.enabled)
+        if req.is_replayable is not None:
+            row.is_replayable = bool(req.is_replayable)
+        if req.retention_days is not None:
+            row.retention_days = int(req.retention_days) if req.retention_days > 0 else None
+        if req.max_bytes is not None:
+            row.max_bytes = int(req.max_bytes) if req.max_bytes > 0 else None
+        if req.description is not None:
+            row.description = req.description
+        await session.commit()
+        _invalidate_cache(slug)
+        from services.recorded_event_bus.catalog import TopicSpec
+        spec = TopicSpec.from_row(row)
+    return _to_response(spec)
+
+
+@router.delete("/{slug:path}")
+async def remove_topic(slug: str) -> dict[str, Any]:
+    deleted = await delete_topic(slug)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"topic {slug!r} not registered")
+    return {"deleted": True, "slug": slug}
+
+
+# ─── Global rotation controls ────────────────────────────────────────

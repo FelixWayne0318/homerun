@@ -568,6 +568,48 @@ async def list_datasets() -> dict[str, Any]:
     return {"datasets": out}
 
 
+@router.get("/sessions")
+async def list_recording_sessions(
+    statuses: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    """List recording sessions, optionally filtered by status (csv)."""
+    from services.recording_session_service import list_sessions
+
+    parsed = [s.strip() for s in (statuses or "").split(",") if s.strip()] or None
+    rows = await list_sessions(statuses=parsed, limit=limit)
+    return {"sessions": [_serialize_session(r) for r in rows]}
+
+
+@router.post("/sessions")
+async def create_recording_session(body: RecordingSessionCreate) -> dict[str, Any]:
+    """Create a new on-demand recording session.
+
+    If ``scheduled_start_at`` is set the session lands in ``scheduled``
+    and the manager loop will activate it at that time.  Otherwise the
+    session lands in ``pending`` — call POST /sessions/{id}/start to
+    activate immediately.
+    """
+    from services.recording_session_service import SessionSpec, create_session
+
+    spec = SessionSpec(
+        name=body.name,
+        description=body.description,
+        platform=body.platform,
+        target_kind=body.target_kind,
+        target_values=body.target_values,
+        capture_types=body.capture_types,
+        tick_interval_ms=body.tick_interval_ms,
+        retention_days=body.retention_days,
+        scheduled_start_at=body.scheduled_start_at,
+        scheduled_end_at=body.scheduled_end_at,
+        max_duration_seconds=body.max_duration_seconds,
+        config=body.config,
+    )
+    row = await create_session(spec)
+    return _serialize_session(row)
+
+
 @router.get("/{name}")
 async def query_dataset(
     name: str,
@@ -861,48 +903,6 @@ def _serialize_session(row: Any) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
-
-
-@router.get("/sessions")
-async def list_recording_sessions(
-    statuses: str | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
-) -> dict[str, Any]:
-    """List recording sessions, optionally filtered by status (csv)."""
-    from services.recording_session_service import list_sessions
-
-    parsed = [s.strip() for s in (statuses or "").split(",") if s.strip()] or None
-    rows = await list_sessions(statuses=parsed, limit=limit)
-    return {"sessions": [_serialize_session(r) for r in rows]}
-
-
-@router.post("/sessions")
-async def create_recording_session(body: RecordingSessionCreate) -> dict[str, Any]:
-    """Create a new on-demand recording session.
-
-    If ``scheduled_start_at`` is set the session lands in ``scheduled``
-    and the manager loop will activate it at that time.  Otherwise the
-    session lands in ``pending`` — call POST /sessions/{id}/start to
-    activate immediately.
-    """
-    from services.recording_session_service import SessionSpec, create_session
-
-    spec = SessionSpec(
-        name=body.name,
-        description=body.description,
-        platform=body.platform,
-        target_kind=body.target_kind,
-        target_values=body.target_values,
-        capture_types=body.capture_types,
-        tick_interval_ms=body.tick_interval_ms,
-        retention_days=body.retention_days,
-        scheduled_start_at=body.scheduled_start_at,
-        scheduled_end_at=body.scheduled_end_at,
-        max_duration_seconds=body.max_duration_seconds,
-        config=body.config,
-    )
-    row = await create_session(spec)
-    return _serialize_session(row)
 
 
 @router.get("/sessions/{session_id}")
