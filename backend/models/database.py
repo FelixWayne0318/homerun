@@ -5577,6 +5577,31 @@ def _slow_tx_after_begin(session, transaction, connection):  # noqa: ANN001
         pass
 
 
+@_sa_event.listens_for(_SyncSessionForEvents, "after_commit")
+def _slow_tx_after_commit(session):  # noqa: ANN001
+    """Clear the stamp once the measured transaction actually ends.
+
+    Without this the first transaction of a long-lived Session keeps its
+    start time forever, so a worker that reuses one session across many
+    short transactions reports its whole session lifetime as a single
+    "long transaction".
+    """
+    try:
+        session.info.pop("_slow_tx_started_at", None)
+        session.info.pop("_slow_tx_origin", None)
+    except Exception:
+        pass
+
+
+@_sa_event.listens_for(_SyncSessionForEvents, "after_rollback")
+def _slow_tx_after_rollback(session):  # noqa: ANN001
+    try:
+        session.info.pop("_slow_tx_started_at", None)
+        session.info.pop("_slow_tx_origin", None)
+    except Exception:
+        pass
+
+
 @_sa_event.listens_for(_SyncSessionForEvents, "before_commit")
 def _slow_tx_before_commit(session):  # noqa: ANN001
     try:

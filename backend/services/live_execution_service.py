@@ -2534,7 +2534,11 @@ class LiveExecutionService:
                 credential_source,
             ) = await self._resolve_polymarket_credentials()
             if not all([private_key, api_key, api_secret, api_passphrase]):
-                logger.error("Missing Polymarket API credentials. Cannot initialize trading.")
+                if self._last_init_error != "missing_polymarket_credentials":
+                    logger.error(
+                        "Missing Polymarket API credentials. Cannot initialize trading; "
+                        "live execution stays disabled until credentials are configured."
+                    )
                 self._last_init_error = "missing_polymarket_credentials"
                 self._init_retry_not_before = None
                 return False
