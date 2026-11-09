@@ -294,10 +294,22 @@ class SimulationService:
             )
             session.add(trade)
 
-            # Create position records
-            for pos in opportunity.positions_to_take:
+            # Create position records.  ``entry_cost`` is the cash actually
+            # committed per leg — the leg's base cost plus its proportional
+            # share of the trade's slippage — so that the sum of position
+            # entry costs equals the trade's total cash outlay.  Positions
+            # are linked back to the trade by ``position_id`` so a later
+            # settlement only touches this trade's own legs.
+            legs = list(opportunity.positions_to_take or [])
+            leg_prices = [float(pos.get("price", 0) or 0.0) for pos in legs]
+            leg_costs = [price * position_size for price in leg_prices]
+            leg_cost_total = sum(leg_costs)
+            created_legs: list[dict[str, Any]] = []
+            for leg_index, pos in enumerate(legs):
                 market_id = pos.get("market_id") or pos.get("market", "")
                 market_question = pos.get("market_question") or pos.get("question") or market_id
+                leg_cost = leg_costs[leg_index]
+                leg_slippage = slippage * (leg_cost / leg_cost_total) if leg_cost_total > 0 else 0.0
                 position = SimulationPosition(
                     id=str(uuid.uuid4()),
                     account_id=account_id,
@@ -307,14 +319,18 @@ class SimulationService:
                     token_id=pos.get("token_id"),
                     side=PositionSide.YES if pos.get("outcome") == "YES" else PositionSide.NO,
                     quantity=position_size,
-                    entry_price=pos.get("price", 0),
-                    entry_cost=pos.get("price", 0) * position_size,
+                    entry_price=leg_prices[leg_index],
+                    entry_cost=leg_cost + leg_slippage,
+                    current_price=leg_prices[leg_index],
+                    unrealized_pnl=-leg_slippage,
                     take_profit_price=take_profit_price,
                     stop_loss_price=stop_loss_price,
                     resolution_date=opportunity.resolution_date,
                     status=TradeStatus.OPEN,
                 )
                 session.add(position)
+                created_legs.append({**pos, "position_id": position.id})
+            trade.positions_data = created_legs
 
             # Update account balance
             account.current_capital -= total_cost
@@ -447,7 +463,9 @@ class SimulationService:
                 entry_price=normalized_entry_price,
                 entry_cost=required_capital,
                 current_price=normalized_entry_price,
-                unrealized_pnl=0.0,
+                # Entry cost already carries the fee, so the mark-to-cost gap
+                # at open is exactly the fee paid.
+                unrealized_pnl=-normalized_entry_fee,
                 status=TradeStatus.OPEN,
                 opened_at=now,
             )
@@ -624,12 +642,39 @@ class SimulationService:
 
             account = await session.get(SimulationAccount, trade.account_id)
 
-            # Calculate payout
-            payout = 0.0
-            for pos in trade.positions_data:
-                if pos.get("outcome") == winning_outcome:
-                    # This position won
-                    payout += 1.0 * (trade.total_cost / len(trade.positions_data))
+            normalized_outcome = str(winning_outcome or "").strip().upper()
+            if normalized_outcome not in {"YES", "NO"}:
+                raise ValueError(f"Unsupported winning outcome: {winning_outcome}")
+            winning_side = PositionSide.YES if normalized_outcome == "YES" else PositionSide.NO
+
+            # Locate this trade's own legs.  New trades carry ``position_id``
+            # on every leg; legacy trades fall back to the opportunity link.
+            positions_data = trade.positions_data if isinstance(trade.positions_data, list) else []
+            position_ids = [
+                str(leg.get("position_id"))
+                for leg in positions_data
+                if isinstance(leg, dict) and leg.get("position_id")
+            ]
+            if position_ids:
+                position_result = await session.execute(
+                    select(SimulationPosition).where(SimulationPosition.id.in_(position_ids))
+                )
+            else:
+                position_result = await session.execute(
+                    select(SimulationPosition).where(
+                        SimulationPosition.opportunity_id == trade.opportunity_id,
+                        SimulationPosition.account_id == trade.account_id,
+                        SimulationPosition.status == TradeStatus.OPEN,
+                    )
+                )
+            leg_positions = list(position_result.scalars().all())
+
+            # Binary markets settle winning shares at $1 each.
+            payout = sum(
+                float(pos.quantity or 0.0)
+                for pos in leg_positions
+                if pos.side == winning_side
+            )
 
             # Apply fee on winnings
             fee = payout * self.POLYMARKET_FEE if payout > 0 else 0
@@ -655,11 +700,9 @@ class SimulationService:
                 account.losing_trades += 1
 
             # Close positions
-            positions = await session.execute(
-                select(SimulationPosition).where(SimulationPosition.opportunity_id == trade.opportunity_id)
-            )
-            for pos in positions.scalars():
+            for pos in leg_positions:
                 pos.status = TradeStatus.RESOLVED_WIN if is_win else TradeStatus.RESOLVED_LOSS
+                pos.unrealized_pnl = 0.0
 
             await session.commit()
             await session.refresh(trade)
@@ -704,12 +747,25 @@ class SimulationService:
             if not account:
                 return None
 
-            # Calculate additional stats
+            # Calculate additional stats.  Positions are marked at their last
+            # known price (falling back to entry price); equity = cash + marks,
+            # so ROI reflects the account's true worth, not just idle cash.
             win_rate = account.winning_trades / account.total_trades * 100 if account.total_trades > 0 else 0
-            roi = (account.current_capital - account.initial_capital) / account.initial_capital * 100
 
             # Get open positions count
             positions = await self.get_open_positions(account_id)
+            book_value = sum(float(pos.entry_cost or 0.0) for pos in positions)
+            market_value = sum(
+                float(pos.quantity or 0.0) * float(pos.current_price if pos.current_price is not None else pos.entry_price)
+                for pos in positions
+            )
+            unrealized_pnl = market_value - book_value
+            equity = account.current_capital + market_value
+            roi = (
+                (equity - account.initial_capital) / account.initial_capital * 100
+                if account.initial_capital > 0
+                else 0
+            )
 
             return {
                 "account_id": account.id,
@@ -717,6 +773,10 @@ class SimulationService:
                 "initial_capital": account.initial_capital,
                 "current_capital": account.current_capital,
                 "total_pnl": account.total_pnl,
+                "unrealized_pnl": unrealized_pnl,
+                "book_value": book_value,
+                "market_value": market_value,
+                "equity": equity,
                 "roi_percent": roi,
                 "total_trades": account.total_trades,
                 "winning_trades": account.winning_trades,

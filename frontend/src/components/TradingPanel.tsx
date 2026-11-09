@@ -3318,7 +3318,8 @@ function latencyStagePercentiles(
   bucket: unknown,
   stageKey: ExecutionLatencyStageKey
 ): { p95: number | null; p99: number | null } {
-  const stage = isRecord(bucket) && isRecord(bucket[stageKey]) ? bucket[stageKey] : null
+  const stage: Record<string, unknown> | null =
+    isRecord(bucket) && isRecord(bucket[stageKey]) ? (bucket[stageKey] as Record<string, unknown>) : null
   if (!stage) return { p95: null, p99: null }
   const p95 = typeof stage.p95 === 'number' && Number.isFinite(stage.p95) ? stage.p95 : null
   const p99 = typeof stage.p99 === 'number' && Number.isFinite(stage.p99) ? stage.p99 : null
@@ -6324,9 +6325,13 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
   const upsertTraderInCache = (trader: Trader) => {
     const normalizedMode: 'shadow' | 'live' = trader.mode === 'live' ? 'live' : 'shadow'
     const otherMode: 'shadow' | 'live' = normalizedMode === 'live' ? 'shadow' : 'live'
-    queryClient.setQueryData<Trader[]>(['traders-list', 'all'], (current) => upsertTraderRows(current, trader))
-    queryClient.setQueryData<Trader[]>(['traders-list', normalizedMode], (current) => upsertTraderRows(current, trader))
-    queryClient.setQueryData<Trader[]>(['traders-list', otherMode], (current) => {
+    queryClient.setQueryData<Trader[]>(['traders-list', 'all'], (current: Trader[] | undefined) =>
+      upsertTraderRows(current, trader)
+    )
+    queryClient.setQueryData<Trader[]>(['traders-list', normalizedMode], (current: Trader[] | undefined) =>
+      upsertTraderRows(current, trader)
+    )
+    queryClient.setQueryData<Trader[]>(['traders-list', otherMode], (current: Trader[] | undefined) => {
       if (!Array.isArray(current)) return current
       return current.filter((row) => row.id !== trader.id)
     })

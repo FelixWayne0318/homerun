@@ -152,15 +152,18 @@ function SessionSidebar({
   const handleArchive = async (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation()
     await archiveAIChatSession(sessionId)
-    queryClient.setQueryData<{ sessions: AIChatSession[]; total: number } | undefined>(['ai-chat-sessions'], (current) => {
-      if (!current) return current
-      const nextSessions = current.sessions.filter((session) => session.session_id !== sessionId)
-      const removed = nextSessions.length !== current.sessions.length
-      return {
-        sessions: nextSessions,
-        total: removed ? Math.max(0, current.total - 1) : current.total,
+    queryClient.setQueryData<{ sessions: AIChatSession[]; total: number } | undefined>(
+      ['ai-chat-sessions'],
+      (current: { sessions: AIChatSession[]; total: number } | undefined) => {
+        if (!current) return current
+        const nextSessions = current.sessions.filter((session) => session.session_id !== sessionId)
+        const removed = nextSessions.length !== current.sessions.length
+        return {
+          sessions: nextSessions,
+          total: removed ? Math.max(0, current.total - 1) : current.total,
+        }
       }
-    })
+    )
     queryClient.invalidateQueries({ queryKey: ['ai-chat-sessions'] })
     onArchiveSession(sessionId)
   }
@@ -743,17 +746,20 @@ export default function AIChatView() {
         : pane
     )))
 
-    queryClient.setQueryData<{ sessions: AIChatSession[]; total: number } | undefined>(['ai-chat-sessions'], (current) => {
-      if (!current) {
-        return { sessions: [normalizedSession], total: 1 }
-      }
+    queryClient.setQueryData<{ sessions: AIChatSession[]; total: number } | undefined>(
+      ['ai-chat-sessions'],
+      (current: { sessions: AIChatSession[]; total: number } | undefined) => {
+        if (!current) {
+          return { sessions: [normalizedSession], total: 1 }
+        }
 
-      const exists = current.sessions.some((item) => item.session_id === normalizedSession.session_id)
-      return {
-        sessions: upsertSessionList(current.sessions, normalizedSession),
-        total: exists ? current.total : current.total + 1,
+        const exists = current.sessions.some((item) => item.session_id === normalizedSession.session_id)
+        return {
+          sessions: upsertSessionList(current.sessions, normalizedSession),
+          total: exists ? current.total : current.total + 1,
+        }
       }
-    })
+    )
 
     if (activePaneKeyRef.current === paneKey) {
       setActiveSessionId(normalizedSession.session_id)

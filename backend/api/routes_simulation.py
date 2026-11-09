@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import OperationalError
@@ -61,14 +62,19 @@ async def list_simulation_accounts():
     accounts_with_positions = await simulation_service.get_all_accounts_with_positions()
     result = []
     for acc, positions in accounts_with_positions:
-        roi = (acc.current_capital - acc.initial_capital) / acc.initial_capital * 100 if acc.initial_capital > 0 else 0
         win_rate = acc.winning_trades / acc.total_trades * 100 if acc.total_trades > 0 else 0
-        # Calculate unrealized P&L from open positions
-        unrealized_pnl = sum(p.unrealized_pnl for p in positions)
-        # Book value = sum of entry costs of open positions
-        book_value = sum(p.entry_cost for p in positions)
-        # Market value = sum of current value of open positions
-        market_value = sum(p.quantity * (p.current_price or p.entry_price) for p in positions)
+        # Book value = cash committed per leg (slippage included at entry).
+        book_value = sum(float(p.entry_cost or 0.0) for p in positions)
+        # Market value = legs marked at their last known price.
+        market_value = sum(
+            float(p.quantity or 0.0) * float(p.current_price if p.current_price is not None else p.entry_price)
+            for p in positions
+        )
+        # Unrealized P&L is the mark-to-cost gap, computed live so stale
+        # rows on disk can never drift from the reported totals.
+        unrealized_pnl = market_value - book_value
+        equity = acc.current_capital + market_value
+        roi = (equity - acc.initial_capital) / acc.initial_capital * 100 if acc.initial_capital > 0 else 0
         result.append(
             {
                 "id": acc.id,
@@ -85,6 +91,7 @@ async def list_simulation_accounts():
                 "unrealized_pnl": unrealized_pnl,
                 "book_value": book_value,
                 "market_value": market_value,
+                "equity": equity,
                 "created_at": acc.created_at.isoformat() if acc.created_at else None,
             }
         )
@@ -143,8 +150,11 @@ async def get_account_positions(account_id: str):
             "quantity": pos.quantity,
             "entry_price": pos.entry_price,
             "entry_cost": pos.entry_cost,
-            "current_price": pos.current_price,
-            "unrealized_pnl": pos.unrealized_pnl,
+            "current_price": pos.current_price if pos.current_price is not None else pos.entry_price,
+            "unrealized_pnl": (
+                float(pos.quantity or 0.0) * float(pos.current_price if pos.current_price is not None else pos.entry_price)
+                - float(pos.entry_cost or 0.0)
+            ),
             "take_profit_price": pos.take_profit_price,
             "stop_loss_price": pos.stop_loss_price,
             "opened_at": pos.opened_at.isoformat(),
@@ -217,6 +227,26 @@ async def get_equity_history(account_id: str):
                 }
             )
 
+    # Mark open legs live and anchor the curve to today's true equity
+    # (cash + marks).  Without the anchor the last plotted point only
+    # reflects realized P&L and never reconciles with the cash balance.
+    book_value = sum(float(p.entry_cost or 0.0) for p in positions)
+    market_value = sum(
+        float(p.quantity or 0.0) * float(p.current_price if p.current_price is not None else p.entry_price)
+        for p in positions
+    )
+    unrealized_pnl = market_value - book_value
+    current_equity = account.current_capital + market_value
+    equity_points.append(
+        {
+            "date": datetime.now(timezone.utc).isoformat(),
+            "equity": current_equity,
+            "pnl": unrealized_pnl,
+            "cumulative_pnl": account.total_pnl + unrealized_pnl,
+            "trade_count": len(sorted_trades),
+        }
+    )
+
     # Calculate max drawdown
     peak = account.initial_capital
     max_drawdown = 0
@@ -240,11 +270,6 @@ async def get_equity_history(account_id: str):
     worst_trade = min((t.actual_pnl for t in resolved), default=0)
     avg_win = gains / account.winning_trades if account.winning_trades > 0 else 0
     avg_loss = losses_abs / account.losing_trades if account.losing_trades > 0 else 0
-
-    # Unrealized P&L
-    unrealized_pnl = sum(p.unrealized_pnl for p in positions)
-    book_value = sum(p.entry_cost for p in positions)
-    market_value = sum(p.quantity * (p.current_price or p.entry_price) for p in positions)
 
     return {
         "account_id": account_id,
@@ -271,7 +296,8 @@ async def get_equity_history(account_id: str):
             "avg_win": avg_win,
             "avg_loss": avg_loss,
             "win_rate": account.winning_trades / account.total_trades * 100 if account.total_trades > 0 else 0,
-            "roi_percent": (account.current_capital - account.initial_capital) / account.initial_capital * 100
+            "equity": current_equity,
+            "roi_percent": (current_equity - account.initial_capital) / account.initial_capital * 100
             if account.initial_capital > 0
             else 0,
         },

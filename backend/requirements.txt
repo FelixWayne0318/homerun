@@ -4,7 +4,7 @@ uvicorn[standard]>=0.31.1
 # MCP server SDK — exposes homerun's backtest + iteration tools to
 # external agents (Claude Code, Cursor, etc.) over stdio and HTTP/SSE.
 # See backend/services/mcp/ for the tool surface.
-mcp>=1.27.0
+mcp>=1.27.0,<2
 sse-starlette>=3.4.0
 python-multipart>=0.0.27
 
@@ -63,7 +63,7 @@ feedparser>=6.0
 numpy>=1.24.0
 scikit-learn>=1.8.0
 onnxruntime>=1.24.0
-xgboost-cpu>=3.2.0
+xgboost>=3.2.0
 lightgbm>=4.6.0
 sentence-transformers>=2.2.0
 faiss-cpu>=1.7.0
