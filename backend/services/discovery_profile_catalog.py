@@ -330,11 +330,11 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
         win_rate = wins / closed_markets if closed_markets > 0 else 0.0
         days_active = self._compute_days_active(trades)
 
-        avg_roi = (
-            sum(market_rois) / len(market_rois)
-            if market_rois
-            else (total_pnl / total_invested * 100 if total_invested > 0 else 0.0)
-        )
+        # Weighted ROI: total PnL over total capital deployed.
+        # The unweighted mean of per-market ROI is dominated by markets whose
+        # buy_cost is a few cents, where (pnl / buy_cost) explodes to 1e9+ and
+        # one such market drags the whole wallet average to nonsense.
+        avg_roi = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
         max_roi = max(market_rois) if market_rois else avg_roi
         min_roi = min(market_rois) if market_rois else avg_roi
         roi_std = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0

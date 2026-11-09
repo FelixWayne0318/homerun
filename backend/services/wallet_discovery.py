@@ -482,12 +482,11 @@ class WalletDiscoveryEngine:
         # Time span
         days_active = self._compute_days_active(trades)
 
-        # ROI statistics
-        avg_roi = (
-            sum(market_rois) / len(market_rois)
-            if market_rois
-            else (total_pnl / total_invested * 100 if total_invested > 0 else 0.0)
-        )
+        # ROI statistics — weighted by deployed capital, not an unweighted
+        # mean of per-market ROI. A market whose cost basis is a few cents
+        # yields (pnl / cost) in the 1e9% range and would otherwise drag the
+        # whole-wallet average to an unattributable number.
+        avg_roi = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
         max_roi = max(market_rois) if market_rois else avg_roi
         min_roi = min(market_rois) if market_rois else avg_roi
         roi_std = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0
@@ -572,6 +571,7 @@ class WalletDiscoveryEngine:
         total_closed_lots = 0
         fifo_market_pnls: list[float] = []
         fifo_market_rois: list[float] = []
+        total_cost_basis = 0.0
 
         for _key, result in fifo_results.items():
             total_winning += result.winning_lots
@@ -584,6 +584,7 @@ class WalletDiscoveryEngine:
                 mpnl = sum(c.realized_pnl for c in result.closed_lots if c.realized_pnl is not None)
                 fifo_market_pnls.append(mpnl)
                 mcost = sum(c.entry_price * c.size for c in result.closed_lots)
+                total_cost_basis += mcost
                 if mcost > 0:
                     fifo_market_rois.append((mpnl / mcost) * 100.0)
 
@@ -597,7 +598,11 @@ class WalletDiscoveryEngine:
             stats["_market_pnls"] = fifo_market_pnls
             if fifo_market_rois:
                 stats["_market_rois"] = fifo_market_rois
-                stats["avg_roi"] = sum(fifo_market_rois) / len(fifo_market_rois)
+                stats["avg_roi"] = (
+                    (sum(fifo_market_pnls) / total_cost_basis * 100.0)
+                    if total_cost_basis > 0
+                    else 0.0
+                )
                 stats["max_roi"] = max(fifo_market_rois)
                 stats["min_roi"] = min(fifo_market_rois)
                 stats["roi_std"] = self._std_dev(fifo_market_rois) if len(fifo_market_rois) > 1 else 0.0
@@ -850,7 +855,13 @@ class WalletDiscoveryEngine:
         market_rois = list(closed_summary["market_rois"])
         market_pnls = list(closed_summary["market_pnls"])
         if market_rois:
-            stats["avg_roi"] = sum(market_rois) / len(market_rois)
+            total_invested_now = self._to_float(stats.get("total_invested"), 0.0)
+            total_pnl_now = self._to_float(stats.get("total_pnl"), 0.0)
+            stats["avg_roi"] = (
+                (total_pnl_now / total_invested_now * 100.0)
+                if total_invested_now > 0
+                else 0.0
+            )
             stats["max_roi"] = max(market_rois)
             stats["min_roi"] = min(market_rois)
             stats["roi_std"] = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0
