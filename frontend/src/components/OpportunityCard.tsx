@@ -461,14 +461,14 @@ function OpportunityCard({
   const headerSubtitle = preferMarketQuestionTitle ? opportunity.title : null
   const marketYesPrice = resolveMarketYesPrice(market)
   const marketNoPrice = resolveMarketNoPrice(market)
-  const weather = market?.weather
+  const weather = market?.weather ?? (opportunity.strategy_context as any)?.weather
   const WEATHER_STRATEGIES = new Set(['weather_edge', 'weather_ensemble_edge', 'weather_distribution'])
   const isWeatherOpportunity = !isSearch && (WEATHER_STRATEGIES.has(opportunity.strategy) || Boolean(weather))
 
   const weatherSources = useMemo((): WeatherForecastSource[] => {
     if (!weather) return []
     const explicit = Array.isArray(weather.forecast_sources)
-      ? weather.forecast_sources.filter((s): s is WeatherForecastSource => Boolean(s?.source_id))
+      ? weather.forecast_sources.filter((s: any): s is WeatherForecastSource => Boolean(s?.source_id))
       : []
     if (explicit.length > 0) {
       return [...explicit].sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
@@ -504,10 +504,10 @@ function OpportunityCard({
   const primaryOutcome = String(opportunity.positions_to_take?.[0]?.outcome ?? '').toUpperCase()
   const isBuyNoWeather = primaryOutcome === 'NO'
   const weatherSourceCount = weather?.source_count ?? weatherSources.length ?? 0
-  const hasWeatherModelSignal = weatherSourceCount > 0 || weather?.consensus_probability != null
+  const hasWeatherModelSignal = weatherSourceCount > 0 || weather?.consensus_probability != null || weather?.model_probability != null
   const consensusYesProbability = (
     hasWeatherModelSignal
-      ? ((weather?.consensus_probability ?? opportunity.expected_payout) ?? null)
+      ? ((weather?.consensus_probability ?? weather?.model_probability ?? opportunity.expected_payout) ?? null)
       : null
   )
   const modelProbability = (

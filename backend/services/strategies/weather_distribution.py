@@ -408,11 +408,14 @@ class WeatherDistributionStrategy(BaseStrategy):
         # 3. Normalize probabilities so they sum to 1.0
         # -----------------------------------------------------------
         total_prob = sum(raw_probs)
-        if total_prob > 0:
+        # Only normalize when we actually hold the full bucket set for one event.
+        # A lone bucket has nothing to share its probability mass with: dividing
+        # p by itself forces every single-market question to model 100%, which
+        # is how synthetic "99.9% edge" signals were being produced.
+        if len(all_buckets) >= 2 and 0.90 <= total_prob <= 1.10:
             normalized_probs = [p / total_prob for p in raw_probs]
         else:
-            n = len(all_buckets)
-            normalized_probs = [1.0 / n for _ in range(n)]
+            normalized_probs = list(raw_probs)
 
         for i, bucket in enumerate(all_buckets):
             bucket["model_prob"] = normalized_probs[i]
