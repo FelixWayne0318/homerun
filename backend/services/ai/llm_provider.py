@@ -945,9 +945,17 @@ class OpenAIProvider(BaseLLMProvider):
         Returns:
             Parsed JSON dict conforming to the schema.
         """
-        # Add system instruction for JSON output
-        # Keep prompt overhead small; schema is already enforced via response_format.
+        # Add system instruction for JSON output.
+        # "json_object" mode carries no schema, so the field names have to be
+        # spelled out in the prompt; otherwise the model invents its own shape
+        # (DeepSeek answered {"type": "json_object", "probability": 0.01} and
+        # every downstream reader found a missing confidence/news_relevance).
         json_instruction = "You MUST respond with valid JSON only. Do not include any text outside the JSON object."
+        if self._structured_output_format != "json_schema":
+            json_instruction += (
+                " The JSON object MUST use exactly these field names and value types:\n"
+                + json.dumps(schema, ensure_ascii=False)
+            )
 
         augmented_messages = list(messages)
         if augmented_messages and augmented_messages[0].role == "system":

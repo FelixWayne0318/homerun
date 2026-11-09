@@ -143,9 +143,9 @@ class StageBudgetTracker:
     upstream event extraction.
 
     Default allocation:
-      - event_extraction: 50%
-      - reranking:        30%
-      - edge_estimation:  20%
+      - event_extraction: 30%
+      - reranking:        20%
+      - edge_estimation:  50%
 
     Leftover budget from a completed stage is redistributed to the
     next stage in sequence.
@@ -168,9 +168,14 @@ class StageBudgetTracker:
     _rerank_finished: bool = False
 
     # Allocation fractions (configurable).
-    _event_frac: float = 0.50
-    _rerank_frac: float = 0.30
-    _edge_frac: float = 0.20
+    # Edge estimation is the only stage that can turn a finding into an
+    # actionable opportunity, so it must receive the largest share. With the
+    # former 50/30/20 split a 60-cluster cycle spent all 15 event calls and all
+    # 9 rerank calls upstream, leaving 6 edge evaluations for 60 candidates and
+    # therefore never a single actionable finding.
+    _event_frac: float = 0.30
+    _rerank_frac: float = 0.20
+    _edge_frac: float = 0.50
 
     def __post_init__(self) -> None:
         if self.total_calls > 0 and self.event_extraction_budget == 0:
@@ -388,11 +393,17 @@ class WorkflowOrchestrator:
                 }
 
             cycle_llm_call_cap = int(wf_settings.get("cycle_llm_call_cap", 30) or 30)
+            # Cluster count follows the configured candidate width (top_k), not
+            # the LLM call cap.  The old "cap * 2" rule pushed 60 clusters into a
+            # 90s cycle, so the loop hit its deadline every single round and
+            # downstream edge evaluation never covered the candidates it was
+            # meant to score.
+            _top_k = int(wf_settings.get("top_k", 20) or 20)
             cluster_limit = max(
                 8,
                 min(
                     len(articles),
-                    max(12, int(cycle_llm_call_cap * 2)),
+                    max(12, _top_k),
                 ),
             )
             clusters = article_clusterer.cluster(articles, max_clusters=None)
@@ -479,12 +490,20 @@ class WorkflowOrchestrator:
                 if not market_watcher_index._initialized:
                     await asyncio.wait_for(
                         loop.run_in_executor(_EMBED_EXECUTOR, market_watcher_index.initialize),
-                        timeout=30,
+                        timeout=120,
                     )
-                await asyncio.wait_for(
-                    loop.run_in_executor(_EMBED_EXECUTOR, market_watcher_index.rebuild, indexed_markets),
-                    timeout=30,
-                )
+                # Encoding ~19k market documents on CPU takes minutes, so a 30s
+                # ceiling used to time out every cycle, silently downgrade to
+                # "continuing without ML", leave zero candidates and end the
+                # cycle with no findings at all.  Reuse the existing index when
+                # the market set has not changed; the rebuild only needs the
+                # longer ceiling when it actually has work to do.
+                if getattr(market_watcher_index, "_indexed_market_count", None) != len(indexed_markets):
+                    await asyncio.wait_for(
+                        loop.run_in_executor(_EMBED_EXECUTOR, market_watcher_index.rebuild, indexed_markets),
+                        timeout=240,
+                    )
+                    setattr(market_watcher_index, "_indexed_market_count", len(indexed_markets))
             except Exception as exc:
                 logger.warning("Market watcher index init/rebuild failed (continuing without ML): %s", exc, exc_info=exc)
 
@@ -667,7 +686,7 @@ class WorkflowOrchestrator:
             )
             time_budget_exhausted = False
 
-            for cluster in clusters:
+            for cluster_index, cluster in enumerate(clusters):
                 if datetime.now(timezone.utc) >= cycle_deadline:
                     time_budget_exhausted = True
                     logger.info(
@@ -890,7 +909,15 @@ class WorkflowOrchestrator:
                         to_estimate.append(rc)
                 await self._release_session_connection(session)
 
-                edge_calls_wanted = min(len(to_estimate), stage_budget.remaining("edge_estimation"))
+                # Share the remaining edge budget across the clusters still to be
+                # processed.  Reserving the whole remainder for the first cluster
+                # let one or two clusters consume every edge call, so the rest
+                # were rejected as "llm_budget_exhausted" and no finding could
+                # ever become actionable.
+                clusters_left = max(1, len(clusters) - cluster_index)
+                edge_remaining = stage_budget.remaining("edge_estimation")
+                edge_share = max(1, edge_remaining // clusters_left)
+                edge_calls_wanted = min(len(to_estimate), edge_share, edge_remaining)
                 llm_calls_for_edges = budget.reserve_calls(edge_calls_wanted)
                 if llm_calls_for_edges > 0:
                     stage_budget.use("edge_estimation", llm_calls_for_edges)
