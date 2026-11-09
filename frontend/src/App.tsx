@@ -1359,7 +1359,6 @@ function App() {
       max_age_hours: 24,
       limit: 1,
     }),
-    enabled: activeTab === 'opportunities',
     refetchInterval: isConnected ? 60000 : 30000,
   })
 
@@ -1370,7 +1369,6 @@ function App() {
       limit: 1,
       offset: 0,
     }),
-    enabled: activeTab === 'opportunities',
     refetchInterval: isConnected ? 60000 : 30000,
   })
 
