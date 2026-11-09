@@ -442,6 +442,13 @@ function App() {
   const [searchFiltersOpen, setSearchFiltersOpen] = useState(false)
   const [cryptoSettingsOpen, setCryptoSettingsOpen] = useState(false)
   const [newsSettingsOpen, setNewsSettingsOpen] = useState(false)
+  // Per-page settings drawers own their page; close them when the user
+  // navigates away instead of leaving them floating over another tab.
+  useEffect(() => {
+    setAccountSettingsOpen(false)
+    setCryptoSettingsOpen(false)
+    setNewsSettingsOpen(false)
+  }, [activeTab])
   const [scannerActivity, setScannerActivity] = useState<string>('Idle')
   const [headerSearchQuery, setHeaderSearchQuery] = useState('')
   const [headerSearchOpen, setHeaderSearchOpen] = useState(false)

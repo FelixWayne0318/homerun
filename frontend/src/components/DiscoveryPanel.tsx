@@ -2384,7 +2384,7 @@ function LeaderboardRow({
       </TableCell>
 
       <TableCell className="px-2 py-1.5 align-middle">
-        {sharpe != null ? (
+        {sharpe != null && Number.isFinite(sharpe) && Math.abs(sharpe) < 1000 ? (
           <MetricPill
             label={t('discoveryPanel.pill.s')}
             value={sharpe.toFixed(2)}

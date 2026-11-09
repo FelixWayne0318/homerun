@@ -69,9 +69,10 @@ async def _sync_strategy_weather_snapshot(
     emitted_count: int,
 ) -> None:
     try:
-        _, existing_status = await shared_state.read_weather_snapshot(session)
+        existing_opps, existing_status = await shared_state.read_weather_snapshot(session)
         stats_payload = dict(existing_status.get("stats") or {})
     except Exception:
+        existing_opps = []
         stats_payload = {}
     cycle_stats = cycle_result.get("stats")
     if isinstance(cycle_stats, dict):
@@ -79,10 +80,21 @@ async def _sync_strategy_weather_snapshot(
     stats_payload["strategy_opportunities"] = len(opportunities)
     stats_payload["signals_emitted_last_run"] = int(emitted_count)
 
+    # This sync only owns executable legs; keep the orchestrator's previously
+    # persisted report-only findings so the "show filtered" toggle stays usable.
+    report_only_existing = [
+        o
+        for o in existing_opps
+        if not (bool(getattr(o, "positions_to_take", None)) and (o.max_position_size or 0.0) > 0.0)
+    ]
+    dispatched_ids = {getattr(o, "id", None) for o in opportunities}
+    preserved = [o for o in report_only_existing if getattr(o, "id", None) not in dispatched_ids]
+    visible_opportunities = list(preserved) + list(opportunities)
+
     await shared_state.write_weather_snapshot(
         session,
         opportunities=sorted(
-            opportunities,
+            visible_opportunities,
             key=lambda opp: float(getattr(opp, "roi_percent", 0.0) or 0.0),
             reverse=True,
         ),

@@ -244,17 +244,29 @@ async def _run_loop() -> None:
                 )
             try:
                 async with AsyncSessionLocal() as session:
-                    _, existing_status = await shared_state.read_weather_snapshot(session)
+                    existing_opps, existing_status = await shared_state.read_weather_snapshot(session)
                     stats_payload = dict(existing_status.get("stats") or {})
                     cycle_stats = result.get("stats")
                     if isinstance(cycle_stats, dict):
                         stats_payload.update(cycle_stats)
                     stats_payload["strategy_opportunities"] = len(deduped_dispatched_opportunities)
                     stats_payload["signals_emitted_last_run"] = int(emitted)
+                    # The orchestrator also persists non-executable findings
+                    # (report_only_findings). This strategy cycle only owns the
+                    # executable legs, so keep the previously written report-only
+                    # rows instead of blanking the whole snapshot with 0 legs.
+                    report_only_existing = [
+                        o
+                        for o in existing_opps
+                        if not (bool(getattr(o, "positions_to_take", None)) and (o.max_position_size or 0.0) > 0.0)
+                    ]
+                    dispatched_ids = {getattr(o, "id", None) for o in deduped_dispatched_opportunities}
+                    preserved = [o for o in report_only_existing if getattr(o, "id", None) not in dispatched_ids]
+                    visible_opportunities = list(preserved) + list(deduped_dispatched_opportunities)
                     await shared_state.write_weather_snapshot(
                         session,
                         opportunities=sorted(
-                            deduped_dispatched_opportunities,
+                            visible_opportunities,
                             key=lambda opp: float(getattr(opp, "roi_percent", 0.0) or 0.0),
                             reverse=True,
                         ),
