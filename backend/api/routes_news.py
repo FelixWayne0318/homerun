@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timezone
 from typing import Optional
 
@@ -10,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query
 from utils.converters import to_iso
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _article_recency_timestamp(article) -> float:
@@ -86,6 +88,16 @@ async def get_articles(
 ):
     """List cached articles in recency order."""
     from services.news.feed_service import news_feed_service
+
+    # The feed cache lives in process memory and is only populated at API
+    # start-up.  Clearing it (the "clear" action) or any restart of the API
+    # process leaves the list empty even though the worker keeps writing
+    # articles to the DB, so reload from the DB instead of reporting 0.
+    if news_feed_service.article_count == 0:
+        try:
+            await news_feed_service.load_from_db()
+        except Exception as exc:
+            logger.warning("news feed cache reload failed: %s", exc, exc_info=exc)
 
     articles = news_feed_service.get_articles(max_age_hours=max_age_hours)
 
