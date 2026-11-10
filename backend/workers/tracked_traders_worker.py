@@ -34,6 +34,7 @@ from services.worker_state import (
     clear_worker_run_request,
     ensure_worker_control,
     read_worker_control,
+    touch_worker_snapshot,
     write_worker_snapshot,
 )
 from utils.logger import get_logger
@@ -423,9 +424,50 @@ async def _market_cache_hygiene_settings() -> dict:
     return config
 
 
+async def _heartbeat_loop() -> None:
+    """Keep the DB heartbeat fresh during a long sweep cycle.
+
+    A full sweep can run for several minutes while the worker is demonstrably
+    alive.  Without a separate heartbeat, /api/workers/status uses the
+    snapshot's updated_at and marks the worker stale after 120 seconds.
+    """
+    while True:
+        await asyncio.sleep(30)
+        try:
+            async with AsyncSessionLocal() as session:
+                await touch_worker_snapshot(session, "tracked_traders")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Tracked-traders heartbeat failed: %s", exc)
+
+
 async def _run_loop() -> None:
     worker_name = "tracked_traders"
     logger.info("Tracked-traders worker started")
+
+    async with AsyncSessionLocal() as session:
+        await write_worker_snapshot(
+            session,
+            worker_name,
+            running=True,
+            enabled=True,
+            current_activity="Tracked-traders worker started; first cycle pending.",
+            interval_seconds=30,
+            last_run_at=None,
+            stats={
+                "pool_size": 0,
+                "active_signals": 0,
+                "signals_emitted_last_run": 0,
+                "confluence_high_extreme": 0,
+                "confluence_scanned": 0,
+                "confluence_executable": 0,
+                "insider_wallets_flagged": 0,
+            },
+        )
+        await ensure_worker_control(session, worker_name, default_interval=30)
+
+    asyncio.create_task(_heartbeat_loop(), name="tracked-traders-heartbeat")
 
     try:
         async with AsyncSessionLocal() as session:
@@ -447,27 +489,6 @@ async def _run_loop() -> None:
     last_insider_flagged = 0
 
     await wallet_intelligence.initialize()
-
-    async with AsyncSessionLocal() as session:
-        await ensure_worker_control(session, worker_name, default_interval=30)
-        await write_worker_snapshot(
-            session,
-            worker_name,
-            running=True,
-            enabled=True,
-            current_activity="Tracked-traders worker started; first cycle pending.",
-            interval_seconds=30,
-            last_run_at=None,
-            stats={
-                "pool_size": 0,
-                "active_signals": 0,
-                "signals_emitted_last_run": 0,
-                "confluence_high_extreme": 0,
-                "confluence_scanned": 0,
-                "confluence_executable": 0,
-                "insider_wallets_flagged": 0,
-            },
-        )
 
     while True:
         async with AsyncSessionLocal() as session:

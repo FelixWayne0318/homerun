@@ -352,6 +352,12 @@ cleanup_stale_homerun_processes() {
     # Kill orphaned Python worker processes from a previous crashed run.
     local project_root
     project_root="$(pwd)"
+    local managed_pids
+    # Never kill a process that launchd is actively supervising.  Doing so
+    # makes `launchctl kickstart` look like it worked while the service was
+    # actually killed and re-spawned by the launcher, and produces transient
+    # stale worker heartbeats.
+    managed_pids="$(launchctl list 2>/dev/null | awk '$1 ~ /^[0-9]+$/ && $3 ~ /^com[.]homerun[.]/ {print $1}')" || true
     local pids
     pids="$(ps -eo pid=,command= 2>/dev/null | grep -E 'workers\.host|workers\.runner|workers\.\w+_worker|uvicorn.*main:app|gui\.py' | grep -v grep | awk '{print $1}')" || true
     if [ -z "$pids" ]; then
@@ -360,6 +366,9 @@ cleanup_stale_homerun_processes() {
     local killed=0
     for pid in $pids; do
         if [ "$pid" = "$$" ]; then
+            continue
+        fi
+        if [ -n "$managed_pids" ] && printf '%s\n' "$managed_pids" | grep -qx "$pid"; then
             continue
         fi
         kill -9 "$pid" 2>/dev/null && killed=$((killed + 1)) || true
@@ -567,9 +576,33 @@ if [ "$RUN_SERVICE_SMOKE_TEST" -eq 1 ]; then
     exit $?
 fi
 
-# Launch the GUI (tkinter – no extra dependencies)
+# Launch the GUI.  The backend venv may use a Homebrew Python without Tk;
+# fall back to a Python that can import tkinter, or open the Web UI directly
+# instead of crashing the launcher with ModuleNotFoundError: _tkinter.
+GUI_PYTHON="python"
+if ! "$GUI_PYTHON" -c 'import tkinter' >/dev/null 2>&1; then
+    GUI_PYTHON=""
+    for candidate in /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+        if [ -x "$candidate" ] && "$candidate" -c 'import tkinter' >/dev/null 2>&1; then
+            GUI_PYTHON="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$GUI_PYTHON" ]; then
+    echo -e "${YELLOW}Desktop GUI unavailable: the current Python has no tkinter.${NC}"
+    echo -e "${DIM}Web services are already running; opening http://127.0.0.1:3000${NC}"
+    if command -v open >/dev/null 2>&1; then
+        open "http://127.0.0.1:3000" >/dev/null 2>&1 || true
+    elif command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "http://127.0.0.1:3000" >/dev/null 2>&1 || true
+    fi
+    exit 0
+fi
+
 if [ "${#GUI_ARGS[@]}" -gt 0 ]; then
-    python gui.py "${GUI_ARGS[@]}"
+    "$GUI_PYTHON" gui.py "${GUI_ARGS[@]}"
 else
-    python gui.py
+    "$GUI_PYTHON" gui.py
 fi

@@ -883,11 +883,17 @@ async def write_worker_snapshot(
     ):
         last_write = _worker_snapshot_last_write_mono.get(worker_key)
         if last_write is None:
-            return
-        if now_mono - last_write < _WORKER_SNAPSHOT_PRESSURE_MIN_INTERVAL_SECONDS:
-            return
-        if last_run_at is None and _worker_snapshot_last_signature.get(worker_key) == signature:
-            return
+            # Always allow the first snapshot after a worker (or worker
+            # process) starts, even while the DB is under pressure.  Startup
+            # heartbeats are what keep the UI from flagging a freshly
+            # restarted worker as stale before its first real cycle ends.
+            if last_run_at is not None:
+                return
+        else:
+            if now_mono - last_write < _WORKER_SNAPSHOT_PRESSURE_MIN_INTERVAL_SECONDS:
+                return
+            if last_run_at is None and _worker_snapshot_last_signature.get(worker_key) == signature:
+                return
     elif (
         bool(running)
         and bool(enabled)
@@ -981,6 +987,20 @@ async def write_worker_snapshot(
                 pass
 
         asyncio.ensure_future(_publish_event())
+
+
+async def touch_worker_snapshot(
+    session: AsyncSession,
+    worker_name: str,
+) -> None:
+    """Refresh a worker's heartbeat without overwriting its activity or stats."""
+    normalized_worker_name = str(worker_name or "").strip().lower()
+    await session.execute(
+        sa_update(WorkerSnapshot)
+        .where(WorkerSnapshot.worker_name == normalized_worker_name)
+        .values(updated_at=_now())
+    )
+    await session.commit()
 
 
 async def read_worker_snapshot(
