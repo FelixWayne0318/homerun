@@ -300,8 +300,6 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
         losses = 0
         market_rois = []
         market_pnls = []
-        closed_cost = 0.0
-        closed_pnl = 0.0
 
         for _mid, pos_data in market_positions.items():
             buy_cost = sum(b["cost"] for b in pos_data["buys"])
@@ -312,8 +310,6 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
                 m_roi = (m_pnl / buy_cost) * 100 if buy_cost > 0 else 0.0
                 market_rois.append(m_roi)
                 market_pnls.append(m_pnl)
-                closed_cost += buy_cost
-                closed_pnl += m_pnl
 
                 if m_pnl > 0:
                     wins += 1
@@ -334,10 +330,9 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
         win_rate = wins / closed_markets if closed_markets > 0 else 0.0
         days_active = self._compute_days_active(trades)
 
-        # Weighted ROI over actual closed-position cost, not total PnL over
-        # open-position capital. Mixing lifetime PnL with a partial cost
-        # denominator produces the 100000%+ values the UI used to show.
-        avg_roi = (closed_pnl / closed_cost * 100) if closed_cost > 0 else 0.0
+        # ROI uses lifetime PnL over deployed capital, matching the original
+        # wallet metric. Per-market ROI remains a dispersion input only.
+        avg_roi = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
         max_roi = max(market_rois) if market_rois else avg_roi
         min_roi = min(market_rois) if market_rois else avg_roi
         roi_std = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0
@@ -354,6 +349,7 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
             "total_invested": total_invested,
             "total_returned": total_returned,
             "avg_roi": avg_roi,
+            "roi_quality": "exact" if total_invested > 0 else "unknown",
             "max_roi": max_roi,
             "min_roi": min_roi,
             "roi_std": roi_std,
@@ -374,7 +370,8 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
             "win_rate_score": 0.5, "win_rate_confidence": 0.0,
             "total_pnl": 0.0, "realized_pnl": 0.0, "unrealized_pnl": 0.0,
             "total_invested": 0.0, "total_returned": 0.0,
-            "avg_roi": 0.0, "max_roi": 0.0, "min_roi": 0.0, "roi_std": 0.0,
+            "avg_roi": None, "roi_quality": "unknown",
+            "max_roi": 0.0, "min_roi": 0.0, "roi_std": 0.0,
             "unique_markets": 0, "open_positions": 0, "days_active": 0,
             "avg_hold_time_hours": 0.0, "trades_per_day": 0.0,
             "avg_position_size": 0.0, "_market_rois": [], "_market_pnls": [],

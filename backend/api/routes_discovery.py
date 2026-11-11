@@ -143,11 +143,13 @@ def _build_wallet_pnl_payload(
     if window_key:
         pnl = (profile.get("rolling_pnl", {}) or {}).get(window_key, 0.0)
         trade_count = (profile.get("rolling_trade_count", {}) or {}).get(window_key, 0)
-        roi_percent = float((profile.get("rolling_roi", {}) or {}).get(window_key, 0.0) or 0.0)
+        roi_percent = (profile.get("rolling_roi", {}) or {}).get(window_key)
+        roi_quality = profile.get("roi_quality", "unknown")
     else:
         pnl = profile.get("total_pnl", 0.0)
         trade_count = profile.get("total_trades", 0)
-        roi_percent = float(profile.get("avg_roi", 0.0) or 0.0)
+        roi_percent = profile.get("avg_roi")
+        roi_quality = profile.get("roi_quality", "unknown")
     total_invested = float(profile.get("total_invested", 0.0) or 0.0)
     return {
         "address": address,
@@ -160,6 +162,8 @@ def _build_wallet_pnl_payload(
         "unrealized_pnl": profile.get("unrealized_pnl", 0.0),
         "total_pnl": pnl,
         "roi_percent": roi_percent,
+        "roi_quality": roi_quality,
+        "cost_coverage": profile.get("cost_coverage"),
     }
 
 

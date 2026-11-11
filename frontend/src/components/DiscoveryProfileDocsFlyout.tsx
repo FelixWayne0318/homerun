@@ -256,6 +256,8 @@ class MyProfile(BaseDiscoveryProfile):
                     ['realized_pnl', t('discoveryProfileDocsFlyout.walletData.fieldRealizedPnl')],
                     ['unrealized_pnl', t('discoveryProfileDocsFlyout.walletData.fieldUnrealizedPnl')],
                     ['avg_roi', t('discoveryProfileDocsFlyout.walletData.fieldAvgRoi')],
+                    ['roi_quality', t('discoveryProfileDocsFlyout.walletData.fieldRoiQuality')],
+                    ['cost_coverage', t('discoveryProfileDocsFlyout.walletData.fieldCostCoverage')],
                   ]} />
                 </div>
 

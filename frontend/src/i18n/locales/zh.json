@@ -2701,7 +2701,9 @@
       "fieldTotalPnl": "float - 终生 PnL（美元）",
       "fieldRealizedPnl": "float - 已实现 PnL（美元）",
       "fieldUnrealizedPnl": "float - 未实现 PnL（美元）",
-      "fieldAvgRoi": "float - 平均投资回报率",
+      "fieldAvgRoi": "float | null - 总盈亏 ÷ 总投入成本；成本缺失时为 null",
+      "fieldRoiQuality": "string - 成本基数质量：exact / estimated / unknown",
+      "fieldCostCoverage": "float - 有成本记录的已平仓占比，0 到 1",
       "fieldSharpeRatio": "float - 风险调整收益（夏普）",
       "fieldSortinoRatio": "float - 下行风险调整收益",
       "fieldMaxDrawdown": "float - 最大回撤（0.0-1.0）",
@@ -4150,7 +4152,8 @@
       "deleteWallet": "删除钱包",
       "viewOnPolymarket": "在 Polymarket 上查看",
       "trackWallet": "跟踪钱包",
-      "roiSampleTooSmall": "买入成本样本过小，ROI 不具参考性；请以已实现现金回报为准。"
+      "roiEstimated": "该 ROI 的成本基数由上游已平仓百分比反推，属于可复核估算；精确成本以成交明细为准。",
+      "roiUnavailable": "成本基数不完整，ROI 暂不可用；不会用 0 或异常百分比代替。"
     },
     "confirm": {
       "deleteWallet": "从发现/池/跟踪数据集中删除 {{address}}?"

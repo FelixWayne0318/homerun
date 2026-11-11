@@ -306,11 +306,7 @@ class BaseDiscoveryProfile:
 
         days_active = self._compute_days_active(trades)
 
-        avg_roi = (
-            sum(market_rois) / len(market_rois)
-            if market_rois
-            else (total_pnl / total_invested * 100 if total_invested > 0 else 0.0)
-        )
+        avg_roi = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
         max_roi = max(market_rois) if market_rois else avg_roi
         min_roi = min(market_rois) if market_rois else avg_roi
         roi_std = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0
@@ -328,6 +324,7 @@ class BaseDiscoveryProfile:
             "total_invested": total_invested,
             "total_returned": total_returned,
             "avg_roi": avg_roi,
+            "roi_quality": "exact" if total_invested > 0 else "unknown",
             "max_roi": max_roi,
             "min_roi": min_roi,
             "roi_std": roi_std,
@@ -356,6 +353,7 @@ class BaseDiscoveryProfile:
             "total_invested": 0.0,
             "total_returned": 0.0,
             "avg_roi": 0.0,
+            "roi_quality": "unknown",
             "max_roi": 0.0,
             "min_roi": 0.0,
             "roi_std": 0.0,

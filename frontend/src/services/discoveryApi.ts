@@ -25,7 +25,9 @@ export interface DiscoveredWallet {
   total_invested?: number | null
   total_returned?: number | null
   realized_pnl?: number | null
-  avg_roi: number
+  avg_roi: number | null
+  roi_quality?: 'exact' | 'estimated' | 'unknown'
+  cost_coverage?: number | null
   sharpe_ratio: number | null
   sortino_ratio: number | null
   max_drawdown: number | null

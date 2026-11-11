@@ -39,6 +39,11 @@ from services.pause_state import global_pause_state
 from utils.converters import coerce_bool as _coerce_bool
 from utils.fifo_pnl import compute_fifo_pnl_multi_market
 from utils.logger import get_logger
+from utils.wallet_metrics import (
+    COST_QUALITY_UNKNOWN,
+    combine_cost_quality,
+    resolve_closed_position_cost,
+)
 
 logger = get_logger("wallet_discovery")
 
@@ -450,8 +455,6 @@ class WalletDiscoveryEngine:
         losses = 0
         market_rois: list[float] = []
         market_pnls: list[float] = []
-        closed_cost = 0.0
-        closed_pnl = 0.0
 
         for _market_id, pos_data in market_positions.items():
             buy_cost = sum(b["cost"] for b in pos_data["buys"])
@@ -462,8 +465,6 @@ class WalletDiscoveryEngine:
                 m_roi = (m_pnl / buy_cost) * 100 if buy_cost > 0 else 0.0
                 market_rois.append(m_roi)
                 market_pnls.append(m_pnl)
-                closed_cost += buy_cost
-                closed_pnl += m_pnl
 
                 if m_pnl > 0:
                     wins += 1
@@ -486,14 +487,14 @@ class WalletDiscoveryEngine:
         # Time span
         days_active = self._compute_days_active(trades)
 
-        # ROI statistics — weighted by deployed capital, not an unweighted
-        # mean of per-market ROI. A market whose cost basis is a few cents
-        # yields (pnl / cost) in the 1e9% range and would otherwise drag the
-        # whole-wallet average to an unattributable number.
-        avg_roi = (closed_pnl / closed_cost * 100) if closed_cost > 0 else 0.0
+        # ROI uses the original design definition: lifetime PnL over deployed
+        # capital. Per-market ROI stays available for dispersion metrics, but
+        # it must not replace the wallet-level ratio.
+        avg_roi = (total_pnl / total_invested * 100) if total_invested > 0 else None
         max_roi = max(market_rois) if market_rois else avg_roi
         min_roi = min(market_rois) if market_rois else avg_roi
         roi_std = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0
+        roi_quality = "exact" if total_invested > 0 else COST_QUALITY_UNKNOWN
 
         # Average position size
         avg_position_size = total_invested / total_trades if total_trades > 0 else 0.0
@@ -512,6 +513,7 @@ class WalletDiscoveryEngine:
             "max_roi": max_roi,
             "min_roi": min_roi,
             "roi_std": roi_std,
+            "roi_quality": roi_quality,
             "unique_markets": len(markets),
             "open_positions": len(positions),
             "days_active": days_active,
@@ -538,10 +540,12 @@ class WalletDiscoveryEngine:
             "unrealized_pnl": 0.0,
             "total_invested": 0.0,
             "total_returned": 0.0,
-            "avg_roi": 0.0,
+            "avg_roi": None,
             "max_roi": 0.0,
             "min_roi": 0.0,
             "roi_std": 0.0,
+            "roi_quality": COST_QUALITY_UNKNOWN,
+            "cost_coverage": 0.0,
             "unique_markets": 0,
             "open_positions": 0,
             "days_active": 0,
@@ -771,6 +775,8 @@ class WalletDiscoveryEngine:
         market_pnls: list[float] = []
         market_rois: list[float] = []
         market_costs: list[float] = []
+        cost_qualities: list[str] = []
+        unknown_positions = 0
 
         for pos in closed_positions:
             if not isinstance(pos, dict):
@@ -790,11 +796,15 @@ class WalletDiscoveryEngine:
                 market_ids.add(market_key)
 
             realized_pnl = self._to_float(pos.get("realizedPnl", 0) or 0)
-            initial_value = self._to_float(pos.get("initialValue", 0) or 0)
             market_pnls.append(realized_pnl)
-            if initial_value > 0:
-                market_costs.append(initial_value)
-                market_rois.append((realized_pnl / initial_value) * 100.0)
+
+            cost_basis, cost_quality = resolve_closed_position_cost(pos)
+            cost_qualities.append(cost_quality)
+            if cost_basis is None:
+                unknown_positions += 1
+            else:
+                market_costs.append(cost_basis)
+                market_rois.append((realized_pnl / cost_basis) * 100.0)
 
             if realized_pnl > 0:
                 wins += 1
@@ -808,6 +818,11 @@ class WalletDiscoveryEngine:
             "market_pnls": market_pnls,
             "market_rois": market_rois,
             "market_costs": market_costs,
+            "cost_quality": combine_cost_quality(cost_qualities, unknown_positions),
+            "cost_coverage": (
+                len(market_costs) / len(market_pnls) if market_pnls else 0.0
+            ),
+            "unknown_positions": unknown_positions,
         }
 
     def _build_accuracy_first_stats(
@@ -869,25 +884,42 @@ class WalletDiscoveryEngine:
 
         market_rois = list(closed_summary["market_rois"])
         market_pnls = list(closed_summary["market_pnls"])
-        market_costs = list(closed_summary["market_costs"])
+
+        snapshot_quality = None
+        snapshot_coverage = None
+        if isinstance(pnl_snapshot, dict):
+            snapshot_quality = pnl_snapshot.get("roi_quality")
+            snapshot_coverage = self._to_float(pnl_snapshot.get("cost_coverage"), 0.0)
+
+        if snapshot_quality in {"exact", "estimated", "unknown"}:
+            stats["roi_quality"] = snapshot_quality
+        elif closed_summary["cost_quality"] != COST_QUALITY_UNKNOWN:
+            stats["roi_quality"] = closed_summary["cost_quality"]
+        else:
+            stats["roi_quality"] = COST_QUALITY_UNKNOWN
+
+        stats["cost_coverage"] = (
+            snapshot_coverage
+            if snapshot_coverage is not None
+            else closed_summary["cost_coverage"]
+        )
+
+        total_invested = self._to_float(stats.get("total_invested"), 0.0)
+        total_pnl = self._to_float(stats.get("total_pnl"), 0.0)
+        if total_invested > 0 and stats["roi_quality"] != COST_QUALITY_UNKNOWN:
+            stats["avg_roi"] = (total_pnl / total_invested) * 100.0
+        else:
+            stats["avg_roi"] = None
+
         if market_rois:
-            closed_pnl = sum(market_pnls)
-            closed_cost = sum(market_costs)
-            stats["avg_roi"] = (
-                (closed_pnl / closed_cost * 100.0)
-                if closed_cost > 0
-                else 0.0
-            )
             stats["max_roi"] = max(market_rois)
             stats["min_roi"] = min(market_rois)
             stats["roi_std"] = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0
             stats["_market_rois"] = market_rois
             stats["_market_pnls"] = market_pnls
-        elif market_pnls:
-            stats["_market_pnls"] = market_pnls
-            stats["avg_roi"] = 0.0
-            stats["max_roi"] = 0.0
-            stats["min_roi"] = 0.0
+        else:
+            stats["max_roi"] = stats["avg_roi"] if stats["avg_roi"] is not None else 0.0
+            stats["min_roi"] = stats["avg_roi"] if stats["avg_roi"] is not None else 0.0
             stats["roi_std"] = 0.0
 
         if closed_summary["market_ids"]:
@@ -1623,6 +1655,8 @@ class WalletDiscoveryEngine:
             "total_invested": stats["total_invested"],
             "total_returned": stats["total_returned"],
             "avg_roi": stats["avg_roi"],
+            "roi_quality": stats["roi_quality"],
+            "cost_coverage": stats["cost_coverage"],
             "max_roi": stats["max_roi"],
             "min_roi": stats["min_roi"],
             "roi_std": stats["roi_std"],
@@ -2256,6 +2290,7 @@ class WalletDiscoveryEngine:
             "discovery_source",
             "recommendation",
             "metrics_source_version",
+            "roi_quality",
             "pool_tier",
             "pool_membership_reason",
             "cluster_id",
@@ -3013,6 +3048,8 @@ class WalletDiscoveryEngine:
                 DiscoveredWallet.win_rate,
                 DiscoveredWallet.total_pnl,
                 DiscoveredWallet.avg_roi,
+                DiscoveredWallet.roi_quality,
+                DiscoveredWallet.cost_coverage,
                 DiscoveredWallet.realized_pnl,
                 DiscoveredWallet.unrealized_pnl,
                 DiscoveredWallet.total_invested,
@@ -3314,6 +3351,8 @@ class WalletDiscoveryEngine:
             "total_invested": w.total_invested,
             "total_returned": w.total_returned,
             "avg_roi": w.avg_roi,
+            "roi_quality": w.roi_quality,
+            "cost_coverage": w.cost_coverage,
             "max_roi": w.max_roi,
             "min_roi": w.min_roi,
             "roi_std": w.roi_std,
@@ -3397,6 +3436,8 @@ class WalletDiscoveryEngine:
             ),
             "total_pnl": w.total_pnl,
             "avg_roi": w.avg_roi,
+            "roi_quality": w.roi_quality,
+            "cost_coverage": w.cost_coverage,
             "realized_pnl": w.realized_pnl,
             "unrealized_pnl": w.unrealized_pnl,
             "total_invested": w.total_invested,

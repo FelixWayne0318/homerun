@@ -15,6 +15,15 @@ from services.live_pressure import publish_backpressure
 from utils.converters import coerce_bool as _coerce_bool
 from utils.rate_limiter import rate_limiter, endpoint_for_url
 from utils.logger import get_logger
+from utils.network_overrides import install_polymarket_dns_override
+from utils.wallet_metrics import (
+    COST_QUALITY_EXACT,
+    COST_QUALITY_UNKNOWN,
+    combine_cost_quality,
+    resolve_closed_position_cost,
+)
+
+install_polymarket_dns_override()
 
 _logger = get_logger("polymarket")
 
@@ -3550,14 +3559,18 @@ class PolymarketClient:
             closed_realized_pnl = 0.0
             closed_invested = 0.0
             closed_returned = 0.0
+            closed_cost_quality: list[str] = []
+            closed_unknown_positions = 0
             for pos in closed_positions:
                 rpnl = float(pos.get("realizedPnl", 0) or 0)
                 closed_realized_pnl += rpnl
-                # Try to get invested amount from closed positions
-                init_val = float(pos.get("initialValue", 0) or 0)
-                if init_val > 0:
-                    closed_invested += init_val
-                    closed_returned += init_val + rpnl
+                cost_basis, cost_quality = resolve_closed_position_cost(pos)
+                if cost_basis is None:
+                    closed_unknown_positions += 1
+                    continue
+                closed_cost_quality.append(cost_quality)
+                closed_invested += cost_basis
+                closed_returned += cost_basis + rpnl
 
             # === Trade-based data (for buy/sell counts and fallback) ===
             total_bought = 0.0
@@ -3620,6 +3633,23 @@ class PolymarketClient:
                 total_invested = total_bought if total_bought > 0 else total_initial_value
                 total_returned = total_sold if total_sold > 0 else total_cash_pnl + total_initial_value
 
+            if closed_positions:
+                cost_quality = combine_cost_quality(
+                    closed_cost_quality,
+                    closed_unknown_positions,
+                )
+                cost_coverage = (
+                    len(closed_cost_quality) / len(closed_positions)
+                    if closed_positions
+                    else 0.0
+                )
+            elif total_invested > 0:
+                cost_quality = combine_cost_quality(["exact"])
+                cost_coverage = 1.0
+            else:
+                cost_quality = COST_QUALITY_UNKNOWN
+                cost_coverage = 0.0
+
             # Calculate ROI
             roi_percent = 0.0
             if total_invested > 0:
@@ -3640,6 +3670,11 @@ class PolymarketClient:
                 "unrealized_pnl": unrealized_pnl,
                 "total_pnl": total_pnl,
                 "roi_percent": roi_percent,
+                "roi_quality": cost_quality,
+                "cost_coverage": cost_coverage,
+                "closed_positions": len(closed_positions),
+                "estimated_positions": len(closed_cost_quality) - closed_cost_quality.count(COST_QUALITY_EXACT),
+                "unknown_positions": closed_unknown_positions,
             }
         except Exception as e:
             _logger.warning(
@@ -3660,6 +3695,8 @@ class PolymarketClient:
                 "unrealized_pnl": 0,
                 "total_pnl": 0,
                 "roi_percent": 0,
+                "roi_quality": COST_QUALITY_UNKNOWN,
+                "cost_coverage": 0.0,
                 "error": str(e),
             }
 

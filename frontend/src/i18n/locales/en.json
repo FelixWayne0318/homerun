@@ -2702,7 +2702,9 @@
       "fieldTotalPnl": "float - Lifetime PnL in USD",
       "fieldRealizedPnl": "float - Realized PnL in USD",
       "fieldUnrealizedPnl": "float - Unrealized PnL in USD",
-      "fieldAvgRoi": "float - Average return on investment",
+      "fieldAvgRoi": "float | null - Total PnL / total invested cost; null when cost is unavailable",
+      "fieldRoiQuality": "string - Cost-basis quality: exact / estimated / unknown",
+      "fieldCostCoverage": "float - Share of closed positions with a cost record, 0 to 1",
       "fieldSharpeRatio": "float - Risk-adjusted return (Sharpe)",
       "fieldSortinoRatio": "float - Downside risk-adjusted return",
       "fieldMaxDrawdown": "float - Maximum drawdown (0.0-1.0)",
@@ -4151,7 +4153,8 @@
       "deleteWallet": "Delete wallet",
       "viewOnPolymarket": "View on Polymarket",
       "trackWallet": "Track wallet",
-      "roiSampleTooSmall": "Buy-cost sample is too small for a meaningful ROI; use realized cash return instead."
+      "roiEstimated": "The cost basis behind this ROI was reconstructed from the upstream closed-position percentage. It is a reviewable estimate; trade-level fills remain the exact source.",
+      "roiUnavailable": "Cost basis is incomplete, so ROI is unavailable. It is not replaced with zero or an implausible percentage."
     },
     "confirm": {
       "deleteWallet": "Delete {{address}} from discovery/pool/tracking datasets?"
