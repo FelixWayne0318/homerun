@@ -82,7 +82,8 @@
     "connecting": "Connexion…",
     "noData": "Aucune donnée",
     "sortBy": "Trier par",
-    "category": "Catégorie"
+    "category": "Catégorie",
+    "accountRoi": "ROI du compte"
   },
   "shortcuts": {
     "goToOpportunities": "Aller aux Opportunités",
@@ -682,9 +683,9 @@
     "notFound": "Introuvable."
   },
   "ticker": {
-    "system": "SYSTÈME",
-    "live": "EN DIRECT",
-    "offline": "HORS LIGNE",
+    "system": "FLUX",
+    "live": "CONNECTÉ",
+    "offline": "DÉCONNECTÉ",
     "paused": "EN PAUSE",
     "scan": "SCAN",
     "workers": "WORKERS",
@@ -742,8 +743,8 @@
     "tabHistory": "Historique",
     "allAccounts": "Tous les comptes",
     "realizedPnl": "PnL Réalisé",
-    "roi": "ROI",
-    "roiDetail": "sur {{amount}}",
+    "roi": "ROI du capital investi",
+    "roiDetail": "P&L réalisé / coût d’achat {{amount}}",
     "winRate": "Taux de Réussite",
     "winRateDetail": "{{w}}G / {{l}}P",
     "open": "Ouvertes",

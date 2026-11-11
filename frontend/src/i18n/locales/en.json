@@ -83,7 +83,8 @@
     "connecting": "Connecting…",
     "noData": "No data",
     "sortBy": "Sort by",
-    "category": "Category"
+    "category": "Category",
+    "accountRoi": "Account ROI"
   },
   "shortcuts": {
     "goToOpportunities": "Go to Opportunities",
@@ -683,9 +684,9 @@
     "notFound": "Not found."
   },
   "ticker": {
-    "system": "SYSTEM",
-    "live": "LIVE",
-    "offline": "OFFLINE",
+    "system": "FEED",
+    "live": "CONNECTED",
+    "offline": "DISCONNECTED",
     "paused": "PAUSED",
     "scan": "SCAN",
     "workers": "WORKERS",
@@ -743,8 +744,8 @@
     "tabHistory": "History",
     "allAccounts": "All accounts",
     "realizedPnl": "Realized P&L",
-    "roi": "ROI",
-    "roiDetail": "on {{amount}}",
+    "roi": "Invested Capital ROI",
+    "roiDetail": "Realized P&L / buy cost {{amount}}",
     "winRate": "Win Rate",
     "winRateDetail": "{{w}}W / {{l}}L",
     "open": "Open",
@@ -938,7 +939,7 @@
     "untrackedCount": "{{n}} untracked",
     "manualCount": "{{n}} manual",
     "loadingHealth": "Loading strategy health...",
-    "noHealthRows": "No strategy health rows yet.",
+    "noHealthRows": "No strategy health rows yet. Click “Evaluate now” to generate them; enabled strategies are not automatically verified.",
     "colStrategy": "Strategy",
     "colStatus": "Status",
     "colSamples": "Samples",
@@ -1238,7 +1239,8 @@
     "errAiModify": "AI modification failed",
     "errNameRequired": "Strategy name is required.",
     "errSlugRequired": "Strategy key is required.",
-    "errTemplateRequired": "Select a template before creating the draft."
+    "errTemplateRequired": "Select a template before creating the draft.",
+    "seedTemplateNotice": "This is strategy template source, not the live strategy. Changes here do not affect the running strategy."
   },
   "strategyConfigForm": {
     "csvPlaceholder": "value1, value2",
@@ -4083,7 +4085,7 @@
       "periodSharpe": "Period Sharpe",
       "trades": "Trades",
       "periodTrades": "Period Trades",
-      "avgRoi": "Avg ROI",
+      "avgRoi": "Realized ROI",
       "periodRoi": "Period ROI",
       "rec": "Rec."
     },
@@ -4148,7 +4150,8 @@
       "unblacklist": "Unblacklist",
       "deleteWallet": "Delete wallet",
       "viewOnPolymarket": "View on Polymarket",
-      "trackWallet": "Track wallet"
+      "trackWallet": "Track wallet",
+      "roiSampleTooSmall": "Buy-cost sample is too small for a meaningful ROI; use realized cash return instead."
     },
     "confirm": {
       "deleteWallet": "Delete {{address}} from discovery/pool/tracking datasets?"
@@ -5385,14 +5388,17 @@
       "prev": "Prev",
       "recentCount": "Recent Count",
       "resolvedCount": " · ",
-      "resolvedPnl": "Resolved P&amp;L",
+      "resolvedPnl": "Verified Settled P&L",
       "riskPressure": "Risk Pressure",
       "rowsCount": "Rows Count",
       "runningBots": "Running Bots",
       "selectedSignals": "Selected Signals",
       "sources": "Sources",
       "todayCount": "Today Count",
-      "top": "Top"
+      "top": "Top",
+      "unverifiedPnl": "{{count}} unverified: {{amount}}",
+      "unverifiedPnlHint": "Unverified orders are excluded from settled P&L; the trade row still shows raw R-P&L.",
+      "unverifiedBadge": "UNVERIFIED"
     },
     "common": {
       "cancel": "Cancel",

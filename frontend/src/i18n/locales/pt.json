@@ -82,7 +82,8 @@
     "connecting": "Conectando…",
     "noData": "Sem dados",
     "sortBy": "Ordenar por",
-    "category": "Categoria"
+    "category": "Categoria",
+    "accountRoi": "ROI da conta"
   },
   "shortcuts": {
     "goToOpportunities": "Ir para Oportunidades",
@@ -682,9 +683,9 @@
     "notFound": "Não encontrado."
   },
   "ticker": {
-    "system": "SISTEMA",
-    "live": "AO VIVO",
-    "offline": "OFFLINE",
+    "system": "CONEXÃO",
+    "live": "CONECTADO",
+    "offline": "DESCONECTADO",
     "paused": "PAUSADO",
     "scan": "VARREDURA",
     "workers": "WORKERS",
@@ -742,8 +743,8 @@
     "tabHistory": "Histórico",
     "allAccounts": "Todas as contas",
     "realizedPnl": "PnL Realizado",
-    "roi": "ROI",
-    "roiDetail": "sobre {{amount}}",
+    "roi": "ROI sobre capital investido",
+    "roiDetail": "P&L realizado / custo de compra {{amount}}",
     "winRate": "Taxa de Acerto",
     "winRateDetail": "{{w}}V / {{l}}D",
     "open": "Abertas",

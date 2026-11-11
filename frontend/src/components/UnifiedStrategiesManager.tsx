@@ -2603,6 +2603,11 @@ export default function UnifiedStrategiesManager({
               {/* Code editor — takes remaining space when its tab is active. */}
               {editorTab === 'code' && (
                 <div className="flex-1 min-h-0 flex flex-col">
+                  {editorCode.trimStart().startsWith('# SEED TEMPLATE') && (
+                    <div className="mx-3 mb-1.5 shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[10px] text-amber-200">
+                      {t('unifiedStrategies.seedTemplateNotice')}
+                    </div>
+                  )}
                   {inferredClassName && (
                     <div className="px-4 py-1.5 flex items-center justify-end shrink-0">
                       <span className="text-[10px] font-mono text-muted-foreground">

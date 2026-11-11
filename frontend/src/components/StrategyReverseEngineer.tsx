@@ -69,23 +69,24 @@ export interface StrategyReverseEngineerProps {
 }
 
 
-// localStorage key for the currently-viewed reverse-engineer job.  The
-// jobs themselves live server-side so navigation only needs to remember
-// "which one was the user looking at?" — the lifecycle (queued ->
-// running -> completed) is the backend's responsibility.
+// sessionStorage key for the currently-viewed reverse-engineer job.
+// The jobs themselves live server-side, so only "which one was the user
+// looking at?" needs to survive tab navigation. Session scope intentionally
+// resets on browser restart so a stale cancelled job never wins over the
+// newest job on first load.
 const RE_SELECTED_JOB_KEY = 'hr_reverse_engineer_selected_job_id'
 
 const readSelectedJobId = (): string | null => {
   try {
-    return localStorage.getItem(RE_SELECTED_JOB_KEY)
+    return sessionStorage.getItem(RE_SELECTED_JOB_KEY)
   } catch {
     return null
   }
 }
 const writeSelectedJobId = (id: string | null) => {
   try {
-    if (id) localStorage.setItem(RE_SELECTED_JOB_KEY, id)
-    else localStorage.removeItem(RE_SELECTED_JOB_KEY)
+    if (id) sessionStorage.setItem(RE_SELECTED_JOB_KEY, id)
+    else sessionStorage.removeItem(RE_SELECTED_JOB_KEY)
   } catch {
     /* silent — quota / disabled storage */
   }

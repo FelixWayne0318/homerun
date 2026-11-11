@@ -450,6 +450,8 @@ class WalletDiscoveryEngine:
         losses = 0
         market_rois: list[float] = []
         market_pnls: list[float] = []
+        closed_cost = 0.0
+        closed_pnl = 0.0
 
         for _market_id, pos_data in market_positions.items():
             buy_cost = sum(b["cost"] for b in pos_data["buys"])
@@ -460,6 +462,8 @@ class WalletDiscoveryEngine:
                 m_roi = (m_pnl / buy_cost) * 100 if buy_cost > 0 else 0.0
                 market_rois.append(m_roi)
                 market_pnls.append(m_pnl)
+                closed_cost += buy_cost
+                closed_pnl += m_pnl
 
                 if m_pnl > 0:
                     wins += 1
@@ -486,7 +490,7 @@ class WalletDiscoveryEngine:
         # mean of per-market ROI. A market whose cost basis is a few cents
         # yields (pnl / cost) in the 1e9% range and would otherwise drag the
         # whole-wallet average to an unattributable number.
-        avg_roi = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
+        avg_roi = (closed_pnl / closed_cost * 100) if closed_cost > 0 else 0.0
         max_roi = max(market_rois) if market_rois else avg_roi
         min_roi = min(market_rois) if market_rois else avg_roi
         roi_std = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0
@@ -766,6 +770,7 @@ class WalletDiscoveryEngine:
         market_ids: set[str] = set()
         market_pnls: list[float] = []
         market_rois: list[float] = []
+        market_costs: list[float] = []
 
         for pos in closed_positions:
             if not isinstance(pos, dict):
@@ -788,6 +793,7 @@ class WalletDiscoveryEngine:
             initial_value = self._to_float(pos.get("initialValue", 0) or 0)
             market_pnls.append(realized_pnl)
             if initial_value > 0:
+                market_costs.append(initial_value)
                 market_rois.append((realized_pnl / initial_value) * 100.0)
 
             if realized_pnl > 0:
@@ -801,6 +807,7 @@ class WalletDiscoveryEngine:
             "market_ids": market_ids,
             "market_pnls": market_pnls,
             "market_rois": market_rois,
+            "market_costs": market_costs,
         }
 
     def _build_accuracy_first_stats(
@@ -862,12 +869,13 @@ class WalletDiscoveryEngine:
 
         market_rois = list(closed_summary["market_rois"])
         market_pnls = list(closed_summary["market_pnls"])
+        market_costs = list(closed_summary["market_costs"])
         if market_rois:
-            total_invested_now = self._to_float(stats.get("total_invested"), 0.0)
-            total_pnl_now = self._to_float(stats.get("total_pnl"), 0.0)
+            closed_pnl = sum(market_pnls)
+            closed_cost = sum(market_costs)
             stats["avg_roi"] = (
-                (total_pnl_now / total_invested_now * 100.0)
-                if total_invested_now > 0
+                (closed_pnl / closed_cost * 100.0)
+                if closed_cost > 0
                 else 0.0
             )
             stats["max_roi"] = max(market_rois)
@@ -877,11 +885,9 @@ class WalletDiscoveryEngine:
             stats["_market_pnls"] = market_pnls
         elif market_pnls:
             stats["_market_pnls"] = market_pnls
-            total_invested = self._to_float(stats.get("total_invested"), 0.0)
-            total_pnl = self._to_float(stats.get("total_pnl"), 0.0)
-            stats["avg_roi"] = (total_pnl / total_invested * 100.0) if total_invested > 0 else 0.0
-            stats["max_roi"] = stats["avg_roi"]
-            stats["min_roi"] = stats["avg_roi"]
+            stats["avg_roi"] = 0.0
+            stats["max_roi"] = 0.0
+            stats["min_roi"] = 0.0
             stats["roi_std"] = 0.0
 
         if closed_summary["market_ids"]:
@@ -3007,6 +3013,10 @@ class WalletDiscoveryEngine:
                 DiscoveredWallet.win_rate,
                 DiscoveredWallet.total_pnl,
                 DiscoveredWallet.avg_roi,
+                DiscoveredWallet.realized_pnl,
+                DiscoveredWallet.unrealized_pnl,
+                DiscoveredWallet.total_invested,
+                DiscoveredWallet.total_returned,
                 DiscoveredWallet.unique_markets,
                 DiscoveredWallet.days_active,
                 DiscoveredWallet.trades_per_day,
@@ -3387,6 +3397,10 @@ class WalletDiscoveryEngine:
             ),
             "total_pnl": w.total_pnl,
             "avg_roi": w.avg_roi,
+            "realized_pnl": w.realized_pnl,
+            "unrealized_pnl": w.unrealized_pnl,
+            "total_invested": w.total_invested,
+            "total_returned": w.total_returned,
             "unique_markets": w.unique_markets,
             "days_active": w.days_active,
             "trades_per_day": w.trades_per_day,

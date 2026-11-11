@@ -20,12 +20,15 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { useAtom } from 'jotai'
 import { cn } from '../lib/utils'
+import { selectedAccountIdAtom } from '../store/atoms'
 import {
   getAccountTrades,
   getLiveWalletPerformance,
   getSimulationAccounts,
   getTraderOrchestratorStats,
+  getTradingStatus,
   type LiveWalletOpenLot,
   type LiveWalletRoundTrip,
   type SimulationAccount,
@@ -308,7 +311,10 @@ function aggregateRollup(rows: UnifiedTradeRow[], keySelector: (row: UnifiedTrad
 
 export default function PerformancePanel() {
   const { t } = useTranslation()
-  const [viewMode, setViewMode] = useState<ViewMode>('live')
+  const [selectedAccountId] = useAtom(selectedAccountIdAtom)
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    selectedAccountId && !selectedAccountId.startsWith('live:') ? 'simulation' : 'live'
+  )
   const [detailTab, setDetailTab] = useState<DetailTab>('overview')
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null)
   const [timeRange, setTimeRange] = useState<TimeRange>('30d')
@@ -338,6 +344,16 @@ export default function PerformancePanel() {
     queryFn: getTraderOrchestratorStats,
     enabled: viewMode === 'live',
   })
+
+  const { data: tradingStatus } = useQuery({
+    queryKey: ['trading-status'],
+    queryFn: getTradingStatus,
+    staleTime: 15_000,
+    retry: false,
+  })
+  const liveWalletReady = Boolean(
+    tradingStatus?.credentials_configured && tradingStatus?.wallet_address
+  )
 
   const {
     data: simulationTrades = [],
@@ -376,7 +392,7 @@ export default function PerformancePanel() {
   } = useQuery({
     queryKey: ['live-wallet-performance', livePerformanceFetchLimit],
     queryFn: () => getLiveWalletPerformance(livePerformanceFetchLimit),
-    enabled: viewMode === 'live',
+    enabled: viewMode === 'live' && liveWalletReady,
     retry: false,
     refetchInterval: 30000,
     placeholderData: (previousData) => previousData,

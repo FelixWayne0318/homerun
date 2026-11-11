@@ -82,7 +82,8 @@
     "connecting": "连接中…",
     "noData": "暂无数据",
     "sortBy": "排序",
-    "category": "类别"
+    "category": "类别",
+    "accountRoi": "账户 ROI"
   },
   "shortcuts": {
     "goToOpportunities": "前往机会",
@@ -682,9 +683,9 @@
     "notFound": "未找到。"
   },
   "ticker": {
-    "system": "系统",
-    "live": "实时",
-    "offline": "离线",
+    "system": "推送连接",
+    "live": "已连接",
+    "offline": "已断开",
     "paused": "已暂停",
     "scan": "扫描",
     "workers": "工作器",
@@ -742,8 +743,8 @@
     "tabHistory": "历史",
     "allAccounts": "所有账户",
     "realizedPnl": "已实现盈亏",
-    "roi": "ROI",
-    "roiDetail": "基于 {{amount}}",
+    "roi": "投入资本 ROI",
+    "roiDetail": "已实现盈亏 / 买入成本 {{amount}}",
     "winRate": "胜率",
     "winRateDetail": "{{w}}胜 / {{l}}负",
     "open": "持仓中",
@@ -937,7 +938,7 @@
     "untrackedCount": "{{n}} 个未跟踪",
     "manualCount": "{{n}} 个手动",
     "loadingHealth": "加载策略健康中...",
-    "noHealthRows": "尚无策略健康行。",
+    "noHealthRows": "尚无策略健康行。点击“立即评估”后才会生成；已启用策略不等于已验证。",
     "colStrategy": "策略",
     "colStatus": "状态",
     "colSamples": "样本",
@@ -1237,7 +1238,8 @@
     "errAiModify": "AI 修改失败",
     "errNameRequired": "策略名称是必需的。",
     "errSlugRequired": "策略键是必需的。",
-    "errTemplateRequired": "在创建草稿之前选择一个模板。"
+    "errTemplateRequired": "在创建草稿之前选择一个模板。",
+    "seedTemplateNotice": "这是策略模板源码，不是当前运行时策略。模板中的参数和逻辑不会自动生效，请不要把这里当作正在运行的策略代码。"
   },
   "strategyConfigForm": {
     "csvPlaceholder": "值1, 值2",
@@ -4082,7 +4084,7 @@
       "periodSharpe": "周期夏普",
       "trades": "交易",
       "periodTrades": "周期交易",
-      "avgRoi": "平均 ROI",
+      "avgRoi": "已实现 ROI",
       "periodRoi": "周期 ROI",
       "rec": "推荐"
     },
@@ -4147,7 +4149,8 @@
       "unblacklist": "移出黑名单",
       "deleteWallet": "删除钱包",
       "viewOnPolymarket": "在 Polymarket 上查看",
-      "trackWallet": "跟踪钱包"
+      "trackWallet": "跟踪钱包",
+      "roiSampleTooSmall": "买入成本样本过小，ROI 不具参考性；请以已实现现金回报为准。"
     },
     "confirm": {
       "deleteWallet": "从发现/池/跟踪数据集中删除 {{address}}?"
@@ -5384,14 +5387,17 @@
       "prev": "上一页",
       "recentCount": "近期数量",
       "resolvedCount": " · ",
-      "resolvedPnl": "已结算 P&L",
+      "resolvedPnl": "已验证已结算 P&L",
       "riskPressure": "风险压力",
       "rowsCount": "行数",
       "runningBots": "运行中的机器人",
       "selectedSignals": "已选信号",
       "sources": "来源",
       "todayCount": "今日数量",
-      "top": "顶部"
+      "top": "顶部",
+      "unverifiedPnl": "另有 {{count}} 笔未验证：{{amount}}",
+      "unverifiedPnlHint": "未验证订单不计入已结算 P&L；交易行仍显示原始 R-P&L。",
+      "unverifiedBadge": "未验证"
     },
     "common": {
       "cancel": "取消",

@@ -2202,6 +2202,10 @@ function LeaderboardRow({
       : (wallet.total_trades ?? 0)
   const roi =
     useWindowMetrics && wallet.period_roi != null ? wallet.period_roi : (wallet.avg_roi ?? 0)
+  // A ROI beyond +/-1000% almost always means the stored avg_roi divided a
+  // lifetime PnL by a tiny sampled cost basis. Hide it instead of showing a
+  // number that cannot be reconciled with the wallet's PnL.
+  const roiIsPlausible = Number.isFinite(roi) && Math.abs(roi) <= 1000
   const composite = wallet.composite_score ?? wallet.rank_score ?? 0
   const activity = wallet.activity_score ?? 0
   const quality = wallet.quality_score ?? wallet.rank_score ?? 0
@@ -2410,9 +2414,10 @@ function LeaderboardRow({
       <TableCell className="px-2 py-1.5 align-middle">
         <MetricPill
           label={t('discoveryPanel.pill.roi')}
-          value={`${roi >= 0 ? '+' : ''}${formatPercent(roi)}`}
-          tone={roi >= 0 ? 'good' : 'bad'}
+          value={roiIsPlausible ? `${roi >= 0 ? '+' : ''}${formatPercent(roi)}` : '—'}
+          tone={roiIsPlausible ? (roi >= 0 ? 'good' : 'bad') : 'neutral'}
           className="min-w-[84px] justify-between"
+          title={roiIsPlausible ? undefined : t('discoveryPanel.tooltip.roiSampleTooSmall')}
         />
       </TableCell>
 

@@ -82,7 +82,8 @@
     "connecting": "接続中…",
     "noData": "データなし",
     "sortBy": "並び替え",
-    "category": "カテゴリー"
+    "category": "カテゴリー",
+    "accountRoi": "口座 ROI"
   },
   "shortcuts": {
     "goToOpportunities": "機会へ移動",
@@ -682,9 +683,9 @@
     "notFound": "見つかりません。"
   },
   "ticker": {
-    "system": "システム",
-    "live": "ライブ",
-    "offline": "オフライン",
+    "system": "配信接続",
+    "live": "接続中",
+    "offline": "切断",
     "paused": "一時停止",
     "scan": "スキャン",
     "workers": "ワーカー",
@@ -742,8 +743,8 @@
     "tabHistory": "履歴",
     "allAccounts": "全アカウント",
     "realizedPnl": "実現損益",
-    "roi": "ROI",
-    "roiDetail": "{{amount}} に対して",
+    "roi": "投下資本 ROI",
+    "roiDetail": "実現 P&L / 購入コスト {{amount}}",
     "winRate": "勝率",
     "winRateDetail": "{{w}}勝 / {{l}}負",
     "open": "オープン",

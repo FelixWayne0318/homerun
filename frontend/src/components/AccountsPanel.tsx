@@ -1224,6 +1224,18 @@ export default function AccountsPanel({ onOpenSettings }: AccountsPanelProps) {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={() => {
+                  setCreateError(null)
+                  setCreateDialogOpen(true)
+                }}
+                className="h-7 gap-1.5 border-amber-500/40 text-[11px] text-amber-300 hover:bg-amber-500/20 hover:text-amber-200"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                {t('accounts.createSandboxAccount', { defaultValue: '新建沙盒账户' })}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => openSandboxDesk(activeSandboxAccountId || undefined)}
                 className="ml-auto h-7 gap-1.5 text-[11px]"
               >

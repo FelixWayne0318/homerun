@@ -82,7 +82,8 @@
     "connecting": "Подключение…",
     "noData": "Нет данных",
     "sortBy": "Сортировать по",
-    "category": "Категория"
+    "category": "Категория",
+    "accountRoi": "ROI счёта"
   },
   "shortcuts": {
     "goToOpportunities": "Перейти к Возможностям",
@@ -682,9 +683,9 @@
     "notFound": "Не найдено."
   },
   "ticker": {
-    "system": "СИСТЕМА",
-    "live": "ЖИВОЙ",
-    "offline": "ОФФЛАЙН",
+    "system": "ПОТОК",
+    "live": "ПОДКЛЮЧЕНО",
+    "offline": "ОТКЛЮЧЕНО",
     "paused": "ПАУЗА",
     "scan": "СКАН",
     "workers": "РАБОЧИЕ",
@@ -742,8 +743,8 @@
     "tabHistory": "История",
     "allAccounts": "Все счета",
     "realizedPnl": "Реализ. PnL",
-    "roi": "ROI",
-    "roiDetail": "на {{amount}}",
+    "roi": "ROI на вложенный капитал",
+    "roiDetail": "Реализованный P&L / стоимость покупки {{amount}}",
     "winRate": "Процент побед",
     "winRateDetail": "{{w}}П / {{l}}Пр",
     "open": "Открыто",

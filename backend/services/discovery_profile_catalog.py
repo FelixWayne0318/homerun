@@ -300,6 +300,8 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
         losses = 0
         market_rois = []
         market_pnls = []
+        closed_cost = 0.0
+        closed_pnl = 0.0
 
         for _mid, pos_data in market_positions.items():
             buy_cost = sum(b["cost"] for b in pos_data["buys"])
@@ -310,6 +312,8 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
                 m_roi = (m_pnl / buy_cost) * 100 if buy_cost > 0 else 0.0
                 market_rois.append(m_roi)
                 market_pnls.append(m_pnl)
+                closed_cost += buy_cost
+                closed_pnl += m_pnl
 
                 if m_pnl > 0:
                     wins += 1
@@ -330,11 +334,10 @@ class DiscoveryScoringProfile(BaseDiscoveryProfile):
         win_rate = wins / closed_markets if closed_markets > 0 else 0.0
         days_active = self._compute_days_active(trades)
 
-        # Weighted ROI: total PnL over total capital deployed.
-        # The unweighted mean of per-market ROI is dominated by markets whose
-        # buy_cost is a few cents, where (pnl / buy_cost) explodes to 1e9+ and
-        # one such market drags the whole wallet average to nonsense.
-        avg_roi = (total_pnl / total_invested * 100) if total_invested > 0 else 0.0
+        # Weighted ROI over actual closed-position cost, not total PnL over
+        # open-position capital. Mixing lifetime PnL with a partial cost
+        # denominator produces the 100000%+ values the UI used to show.
+        avg_roi = (closed_pnl / closed_cost * 100) if closed_cost > 0 else 0.0
         max_roi = max(market_rois) if market_rois else avg_roi
         min_roi = min(market_rois) if market_rois else avg_roi
         roi_std = self._std_dev(market_rois) if len(market_rois) > 1 else 0.0

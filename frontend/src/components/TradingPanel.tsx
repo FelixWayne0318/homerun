@@ -774,6 +774,18 @@ const RESOLVED_ORDER_STATUSES = new Set([
   'loss',
 ])
 const FAILED_ORDER_STATUSES = new Set(['failed', 'rejected', 'error', 'cancelled'])
+// Keep this in sync with backend/services/trader_orchestrator_state.py.
+// These verification statuses mean the venue has not confirmed the P&L,
+// so their actual_profit must not be counted in the settled total.
+const UNVERIFIED_PNL_STATUSES = new Set([
+  'summary_only',
+  'local',
+  'disputed',
+  'wallet_position',
+  'venue_order',
+])
+const isVerifiedPnlOrder = (order: TraderOrder): boolean =>
+  !UNVERIFIED_PNL_STATUSES.has(normalizeStatus(order.verification_status))
 
 const FALLBACK_TRADER_SOURCES: TraderSource[] = [
   {
@@ -7799,6 +7811,18 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
     }
   }, [ordersSummaryQuery.data, allOrders, traderNameById])
 
+  const unverifiedSettledSummary = useMemo(() => {
+    let count = 0
+    let pnl = 0
+    for (const order of allOrders) {
+      const status = normalizeStatus(order.status)
+      if (!RESOLVED_ORDER_STATUSES.has(status) || isVerifiedPnlOrder(order)) continue
+      count += 1
+      pnl += toNumber(order.actual_profit)
+    }
+    return { count, pnl }
+  }, [allOrders])
+
   const globalPositionBook = useMemo(
     () => buildPositionBookRows(allOrders, traderNameById, decisionSignalPayloadByDecisionId, liveMarksByOrderId),
     [allOrders, traderNameById, decisionSignalPayloadByDecisionId, liveMarksByOrderId]
@@ -9758,6 +9782,7 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
         outcomeDetail,
         venuePresentation,
       } = row
+      const pnlVerified = isVerifiedPnlOrder(order)
       const pendingExitLabel = pendingExitStatus && pendingExitStatus !== 'unknown'
         ? (pendingExitStatus === 'failed' && OPEN_ORDER_STATUSES.has(status)
           ? 'Exit:RETRY'
@@ -9878,8 +9903,31 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
               ) : '—'}
             </TableCell>
             <TableCell className={cn('text-right font-mono py-0.5 text-[10px] font-semibold', dynamicEdgePercent > 0 ? 'text-emerald-500' : dynamicEdgePercent < 0 ? 'text-red-500' : '')}>{formatPercent(dynamicEdgePercent)}</TableCell>
-            <TableCell className={cn('text-right font-mono py-0.5 text-[10px] font-semibold', pnl > 0 ? 'text-emerald-500' : pnl < 0 ? 'text-red-500' : '')}>
-              {RESOLVED_ORDER_STATUSES.has(status) ? formatCurrency(pnl, true) : '—'}
+            <TableCell
+              className={cn(
+                'text-right font-mono py-0.5 text-[10px] font-semibold',
+                RESOLVED_ORDER_STATUSES.has(status)
+                  ? pnlVerified
+                    ? pnl > 0
+                      ? 'text-emerald-500'
+                      : pnl < 0
+                        ? 'text-red-500'
+                        : ''
+                    : 'text-amber-300'
+                  : ''
+              )}
+              title={RESOLVED_ORDER_STATUSES.has(status) && !pnlVerified ? t('tradingPanel.allBots.unverifiedPnlHint') : undefined}
+            >
+              {RESOLVED_ORDER_STATUSES.has(status) ? (
+                <span className="inline-flex items-center justify-end gap-1">
+                  {formatCurrency(pnl, true)}
+                  {!pnlVerified && (
+                    <span className="text-[8px] font-normal uppercase text-amber-400/90">
+                      {t('tradingPanel.allBots.unverifiedBadge')}
+                    </span>
+                  )}
+                </span>
+              ) : '—'}
             </TableCell>
             <TableCell className="py-0.5">
               <Badge
@@ -9971,6 +10019,7 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
       bundleSettlementReady,
     } = displayRow
     const order = primaryRow.order
+    const pnlVerified = isVerifiedPnlOrder(order)
     const traderLabel = traderNameById[String(order.trader_id || '')] || shortId(order.trader_id)
     const links = resolveTradeDisplayRowLinks(displayRow)
     const primaryMarketLink = links.polymarket || links.kalshi
@@ -10158,9 +10207,32 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
           >
             {hasOpenResolutionProfile ? resolutionRoiLabel : formatPercent(dynamicEdgePercent)}
           </TableCell>
-          <TableCell className={cn('text-right font-mono py-0.5 text-[10px] font-semibold', RESOLVED_ORDER_STATUSES.has(status) ? (realizedPnl > 0 ? 'text-emerald-500' : realizedPnl < 0 ? 'text-red-500' : '') : '')}>
+          <TableCell
+            className={cn(
+              'text-right font-mono py-0.5 text-[10px] font-semibold',
+              RESOLVED_ORDER_STATUSES.has(status)
+                ? pnlVerified
+                  ? realizedPnl > 0
+                    ? 'text-emerald-500'
+                    : realizedPnl < 0
+                      ? 'text-red-500'
+                      : ''
+                  : 'text-amber-300'
+                : ''
+            )}
+            title={RESOLVED_ORDER_STATUSES.has(status) && !pnlVerified ? t('tradingPanel.allBots.unverifiedPnlHint') : undefined}
+          >
             {RESOLVED_ORDER_STATUSES.has(status)
-              ? formatCurrency(realizedPnl, true)
+              ? (
+                <span className="inline-flex items-center justify-end gap-1">
+                  {formatCurrency(realizedPnl, true)}
+                  {!pnlVerified && (
+                    <span className="text-[8px] font-normal uppercase text-amber-400/90">
+                      {t('tradingPanel.allBots.unverifiedBadge')}
+                    </span>
+                  )}
+                </span>
+              )
               : '—'}
           </TableCell>
           <TableCell className="py-0.5">
@@ -10459,6 +10531,14 @@ export default function TradingPanel({ isConnected = false }: TradingPanelProps 
                             <p className="text-[10px] text-muted-foreground">
                               {t('tradingPanel.allBots.latestDay')} {formatSignedCurrency(overviewLatestBucket?.resolvedPnl ?? 0)}
                             </p>
+                            {unverifiedSettledSummary.count > 0 && (
+                              <p className="text-[10px] text-amber-300" title={t('tradingPanel.allBots.unverifiedPnlHint')}>
+                                {t('tradingPanel.allBots.unverifiedPnl', {
+                                  count: unverifiedSettledSummary.count,
+                                  amount: formatSignedCurrency(unverifiedSettledSummary.pnl),
+                                })}
+                              </p>
+                            )}
                             <div className="mt-1.5 h-8">
                               {overviewPnlSeries.length >= 2 && (
                                 <Liveline

@@ -22,6 +22,9 @@ export interface DiscoveredWallet {
   win_rate_score?: number
   win_rate_confidence?: number
   total_pnl: number
+  total_invested?: number | null
+  total_returned?: number | null
+  realized_pnl?: number | null
   avg_roi: number
   sharpe_ratio: number | null
   sortino_ratio: number | null

@@ -82,7 +82,8 @@
     "connecting": "연결 중…",
     "noData": "데이터 없음",
     "sortBy": "정렬 기준",
-    "category": "카테고리"
+    "category": "카테고리",
+    "accountRoi": "계정 ROI"
   },
   "shortcuts": {
     "goToOpportunities": "기회로 이동",
@@ -682,9 +683,9 @@
     "notFound": "찾을 수 없음."
   },
   "ticker": {
-    "system": "시스템",
-    "live": "실시간",
-    "offline": "오프라인",
+    "system": "연결",
+    "live": "연결됨",
+    "offline": "연결 끊김",
     "paused": "일시정지",
     "scan": "스캔",
     "workers": "워커",
@@ -742,8 +743,8 @@
     "tabHistory": "내역",
     "allAccounts": "모든 계정",
     "realizedPnl": "실현 손익",
-    "roi": "ROI",
-    "roiDetail": "{{amount}} 기준",
+    "roi": "투입 자본 ROI",
+    "roiDetail": "실현 P&L / 매수 원가 {{amount}}",
     "winRate": "승률",
     "winRateDetail": "{{w}}승 / {{l}}패",
     "open": "열림",

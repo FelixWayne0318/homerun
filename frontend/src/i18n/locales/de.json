@@ -82,7 +82,8 @@
     "connecting": "Verbinde…",
     "noData": "Keine Daten",
     "sortBy": "Sortieren nach",
-    "category": "Kategorie"
+    "category": "Kategorie",
+    "accountRoi": "Konto-ROI"
   },
   "shortcuts": {
     "goToOpportunities": "Zu Chancen",
@@ -682,9 +683,9 @@
     "notFound": "Nicht gefunden."
   },
   "ticker": {
-    "system": "SYSTEM",
-    "live": "LIVE",
-    "offline": "OFFLINE",
+    "system": "VERBINDUNG",
+    "live": "VERBUNDEN",
+    "offline": "GETRENNT",
     "paused": "PAUSIERT",
     "scan": "SCAN",
     "workers": "WORKER",
@@ -742,8 +743,8 @@
     "tabHistory": "Historie",
     "allAccounts": "Alle Konten",
     "realizedPnl": "Realisierter GuV",
-    "roi": "ROI",
-    "roiDetail": "auf {{amount}}",
+    "roi": "Investiertes Kapital ROI",
+    "roiDetail": "Realisierter P&L / Einkaufskosten {{amount}}",
     "winRate": "Gewinnrate",
     "winRateDetail": "{{w}}S / {{l}}N",
     "open": "Offen",

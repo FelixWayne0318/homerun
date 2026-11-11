@@ -1855,7 +1855,7 @@ function App() {
     <TooltipProvider>
       <div className="h-screen flex flex-col overflow-hidden bg-background">
         {/* ==================== Top Bar ==================== */}
-        <header className="h-12 border-b border-border/40 bg-background/70 backdrop-blur-xl flex items-center px-4 shrink-0 z-50">
+        <header className="h-12 border-b border-border/40 bg-background/70 backdrop-blur-xl flex items-center px-2 sm:px-4 shrink-0 z-50 min-w-0">
           <div className="flex items-center gap-3 mr-4">
             <div className="w-7 h-7 bg-green-500/15 rounded-lg flex items-center justify-center border border-green-500/20">
               <Terminal className="w-4 h-4 text-green-400" />
@@ -1866,7 +1866,7 @@ function App() {
           <AccountModeSelector />
 
           {/* Inline Account Stats */}
-          <div className="hidden md:flex items-center gap-1 text-xs ml-3">
+          <div className="hidden xl:flex shrink-0 items-center gap-1 text-xs ml-3">
             <div className="stat-pill flex items-center gap-1 px-2 py-1 rounded-md">
               <Briefcase className="w-3 h-3 text-emerald-400" />
               <span className="text-muted-foreground">Value</span>
@@ -1885,7 +1885,7 @@ function App() {
             </div>
             <div className="stat-pill flex items-center gap-1 px-2 py-1 rounded-md">
               <DollarSign className="w-3 h-3 text-yellow-400" />
-              <span className="text-muted-foreground">ROI</span>
+              <span className="text-muted-foreground">{t('common.accountRoi')}</span>
               <FlashNumber value={headerStats.roi} suffix="%" decimals={1} className={cn("font-data font-semibold", headerStats.roi >= 0 ? "text-green-400" : "text-red-400")} />
             </div>
             <div className="stat-pill flex items-center gap-1 px-2 py-1 rounded-md">
@@ -1896,7 +1896,7 @@ function App() {
           </div>
 
           {/* Universal Search Bar */}
-          <div ref={headerSearchContainerRef} className="relative flex-1 max-w-md mx-4">
+          <div ref={headerSearchContainerRef} className="relative flex-1 min-w-0 max-w-md mx-2 lg:mx-4">
             <form
               onSubmit={(e) => {
                 e.preventDefault()
@@ -2003,7 +2003,7 @@ function App() {
           </div>
 
           {/* Right Controls */}
-          <div className="flex items-center gap-1.5 ml-auto">
+          <div className="flex shrink-0 items-center gap-1.5 ml-auto">
             <Tooltip delayDuration={0}>
               <TooltipTrigger asChild>
                 <button
@@ -2156,7 +2156,7 @@ function App() {
               <div className="flex-1 section-enter overflow-y-auto">
                 <div className="mx-auto px-6 py-5 max-w-[1600px]">
                   {/* View Toggle + View Mode */}
-                  <div className="flex items-center gap-2 mb-4">
+                  <div className="flex flex-wrap items-center gap-2 mb-4">
                     {/* Dynamic tab buttons derived from registered strategy source_keys */}
                     {opportunityTabs.map(({ key, config, count, label }) => {
                       const Icon = config.icon
