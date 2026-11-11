@@ -61,7 +61,7 @@ export interface WalletPnL {
   realized_pnl: number
   unrealized_pnl: number
   total_pnl: number
-  roi_percent: number
+  roi_percent: number | null
   error?: string
 }
 

@@ -322,7 +322,7 @@ function OverviewHeroPanel({
   riskLabel: string
   riskBadgeClass: string
   totalPnl: number
-  roiPercent: number
+  roiPercent: number | null
   isProfitable: boolean
   winRate: number
   wins: number
@@ -387,7 +387,7 @@ function OverviewHeroPanel({
               <StatTile
                 label={t('walletAnalysisPanel.totalPnl')}
                 value={formatSignedCurrency(totalPnl)}
-                delta={formatSignedPercent(roiPercent)}
+                delta={roiPercent == null ? '—' : formatSignedPercent(roiPercent)}
                 positive={isProfitable}
                 icon={isProfitable ? TrendingUp : TrendingDown}
               />
@@ -1007,7 +1007,7 @@ export default function WalletAnalysisPanel({ initialWallet, initialUsername, on
 
   const summaryData = summaryQuery.data?.summary
   const totalPnl = pnlQuery.data?.total_pnl ?? summaryData?.total_pnl ?? 0
-  const roiPercent = pnlQuery.data?.roi_percent ?? summaryData?.roi_percent ?? 0
+  const roiPercent = pnlQuery.data?.roi_percent ?? summaryData?.roi_percent ?? null
   const totalInvested = pnlQuery.data?.total_invested ?? summaryData?.total_invested ?? 0
   const totalReturned = pnlQuery.data?.total_returned ?? summaryData?.total_returned ?? 0
   const totalTrades = pnlQuery.data?.total_trades ?? summaryData?.total_trades ?? trades.length
