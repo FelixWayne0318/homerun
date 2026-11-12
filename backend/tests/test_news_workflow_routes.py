@@ -190,7 +190,8 @@ async def test_load_shared_backfill_market_history_uses_scanner_attach(monkeypat
     assert args is not None
     assert len(args.args) == 1
     assert len(args.args[0]) == 1
-    assert args.kwargs.get("timeout_seconds") == 12.0
+    assert args.kwargs.get("timeout_seconds") == 0.0
+    assert args.kwargs.get("block_for_backfill") is False
     assert "now" in args.kwargs
     assert args.args[0][0].strategy == "news_edge"
     assert args.args[0][0].markets[0]["id"] == "0xmarket"

@@ -746,7 +746,13 @@ async def write_market_catalog(
 
     events_payload, markets_payload = await asyncio.to_thread(_serialize_catalog_payloads)
     updated_at = utcnow()
-    should_replace_catalog = error is None or bool(events_payload) or bool(markets_payload)
+    # A refresh that reports an error is degraded, even when it managed to
+    # return a partial page set. Persisting that partial payload would
+    # overwrite the last complete catalog and make downstream consumers
+    # believe thousands of markets vanished. Only a clean refresh replaces
+    # the snapshot; degraded refreshes update the error metadata and keep
+    # both the DB payload and the cache file intact.
+    should_replace_catalog = error is None
     if should_replace_catalog:
         await asyncio.to_thread(
             _write_market_catalog_file,
@@ -777,12 +783,12 @@ async def write_market_catalog(
     )
 
     values = {
-        "updated_at": updated_at,
         "error": error,
     }
     if should_replace_catalog:
         values.update(
             {
+                "updated_at": updated_at,
                 "events_json": [],
                 "markets_json": [],
                 "event_count": len(events_payload),
@@ -790,6 +796,10 @@ async def write_market_catalog(
                 "fetch_duration_seconds": duration_seconds,
             }
         )
+    else:
+        # Preserve the last complete snapshot's timestamp. Assigning the
+        # column to itself also overrides the model's onupdate hook.
+        values["updated_at"] = MarketCatalog.updated_at
 
     update_result = await session.execute(
         update(MarketCatalog).where(MarketCatalog.id == CATALOG_ID).values(**values)
@@ -802,6 +812,7 @@ async def write_market_catalog(
             "market_count": len(markets_payload) if should_replace_catalog else 0,
             "fetch_duration_seconds": duration_seconds if should_replace_catalog else None,
             **values,
+            "updated_at": updated_at,
         }
         session.add(MarketCatalog(id=CATALOG_ID, **insert_values))
     await _commit_with_retry(session)

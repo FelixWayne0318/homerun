@@ -17,6 +17,15 @@ from services import shared_state  # noqa: E402
 from utils.utcnow import utcnow  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolate_market_catalog_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        shared_state,
+        "_MARKET_CATALOG_FILE_PATH",
+        tmp_path / "market_catalog_latest.json",
+    )
+
+
 class _FakeScalarResult:
     def __init__(self, scalar_value=None, scalars_list=None, rowcount=None):
         self._scalar_value = scalar_value
@@ -322,6 +331,68 @@ async def test_write_market_catalog_serializes_before_db_checkout(monkeypatch):
 
     commit_mock.assert_awaited_once()
     assert any("UPDATE" in str(statement) for statement, _ in session.statements)
+
+
+@pytest.mark.asyncio
+async def test_write_market_catalog_error_only_does_not_advance_snapshot_timestamp(monkeypatch):
+    commit_mock = AsyncMock()
+    monkeypatch.setattr(shared_state, "_commit_with_retry", commit_mock)
+    session = _FakeSession(execute_results=[{"rowcount": 1}, {"rowcount": 1}])
+
+    await shared_state.write_market_catalog(
+        session,
+        [],
+        [],
+        duration_seconds=1.5,
+        error="Catalog refresh degraded; preserved previous catalog",
+    )
+
+    commit_mock.assert_awaited_once()
+    update_statements = [
+        statement for statement, _ in session.statements if "UPDATE market_catalog" in str(statement)
+    ]
+    assert update_statements
+    assert "updated_at=market_catalog.updated_at" in str(update_statements[-1])
+    assert "error" in str(update_statements[-1])
+
+
+@pytest.mark.asyncio
+async def test_write_market_catalog_degraded_partial_payload_is_not_persisted(monkeypatch):
+    commit_mock = AsyncMock()
+    monkeypatch.setattr(shared_state, "_commit_with_retry", commit_mock)
+    session = _FakeSession(execute_results=[{"rowcount": 1}])
+    file_writes = []
+    monkeypatch.setattr(
+        shared_state,
+        "_write_market_catalog_file",
+        lambda *args, **kwargs: file_writes.append(kwargs),
+    )
+
+    class _PartialEvent:
+        def model_dump(self, *, mode="json", exclude=None):
+            return {"id": "event-partial", "slug": "event-partial", "markets": []}
+
+    class _PartialMarket:
+        def model_dump(self, *, mode="json"):
+            return {"id": "market-partial", "condition_id": "condition-partial"}
+
+    await shared_state.write_market_catalog(
+        session,
+        [_PartialEvent()],
+        [_PartialMarket()],
+        duration_seconds=3.5,
+        error="Catalog refresh degraded; preserved previous catalog",
+    )
+
+    assert file_writes == []
+    commit_mock.assert_awaited_once()
+    update_statements = [
+        statement for statement, _ in session.statements if "UPDATE market_catalog" in str(statement)
+    ]
+    assert update_statements
+    assert "updated_at=market_catalog.updated_at" in str(update_statements[-1])
+    assert "event_count" not in str(update_statements[-1])
+    assert "market_count" not in str(update_statements[-1])
 
 
 @pytest.mark.asyncio

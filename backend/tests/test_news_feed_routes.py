@@ -60,7 +60,10 @@ async def test_get_articles_sorts_by_published_then_fetched_and_serializes_utc(
             fetched_at=datetime(2026, 2, 11, 6, 0, 0, tzinfo=timezone.utc),
         ),
     ]
-    fake_service = SimpleNamespace(get_articles=lambda max_age_hours=None: list(articles))
+    fake_service = SimpleNamespace(
+        article_count=len(articles),
+        get_articles=lambda max_age_hours=None: list(articles),
+    )
     monkeypatch.setitem(
         sys.modules,
         "services.news.feed_service",

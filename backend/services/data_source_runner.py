@@ -11,7 +11,7 @@ from types import MethodType
 from time import mktime
 from typing import Any
 
-from sqlalchemy import delete, desc, func, select, tuple_
+from sqlalchemy import and_, delete, desc, func, or_, select
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -409,12 +409,18 @@ async def _apply_retention_policy(
             # exactly max_records rows.
             delete_stmt = delete(DataSourceRecord).where(
                 DataSourceRecord.data_source_id == source_id,
-                tuple_(
-                    ordered_at,
-                    DataSourceRecord.ingested_at,
-                    DataSourceRecord.id,
-                )
-                <= tuple_(b_ordered_at, b_ingested, b_id),
+                or_(
+                    ordered_at < b_ordered_at,
+                    and_(
+                        ordered_at == b_ordered_at,
+                        DataSourceRecord.ingested_at < b_ingested,
+                    ),
+                    and_(
+                        ordered_at == b_ordered_at,
+                        DataSourceRecord.ingested_at == b_ingested,
+                        DataSourceRecord.id <= b_id,
+                    ),
+                ),
             ).execution_options(synchronize_session=False)
             delete_result = await session.execute(delete_stmt)
             max_records_deleted = int(delete_result.rowcount or 0)

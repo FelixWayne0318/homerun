@@ -41,6 +41,24 @@ from services.recorded_event_bus.catalog import (
 # ── Envelope ────────────────────────────────────────────────────────
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _reset_parquet_loop_primitives():
+    """Drop asyncio primitives bound to earlier test loops.
+
+    ``parquet_backend`` caches its flush locks and task in module globals.
+    Another test module that published to the bus on its own event loop
+    leaves those objects bound to a now-closed loop, and the first
+    ``bus.publish`` in this module then blocks forever acquiring that
+    dead lock. Reset them before this module's loop starts using them.
+    """
+    from services.recorded_event_bus.storage import parquet_backend as pb
+
+    pb._flush_lock = None
+    pb._flush_task_lock = None
+    pb._flush_task = None
+    yield
+
+
 @pytest_asyncio.fixture(scope="module", loop_scope="module", autouse=True)
 async def _ensure_topic_catalog_schema():
     from models.database import TopicCatalog, async_engine
@@ -259,6 +277,13 @@ class TestBusStorageRoundTrip:
         batch and only ever flush on graceful shutdown — silent data loss + an
         empty parquet stream for backtest replay (the bug this guards)."""
         from services.recorded_event_bus.storage import parquet_backend as pb
+
+        # A previous test in this module can leave the real flusher task
+        # running on the same event loop. Since it resolves ``_flush_once``
+        # through this module, the monkeypatched fake below would be called
+        # by that leaked task and corrupt the cadence assertion. Stop it
+        # before installing the fake.
+        await pb.shutdown_parquet_backend()
 
         # (a) drain contract — a single-event (partial) bucket is SKIPPED by the
         # full-batch drain but CAUGHT by drain_all (the partial-cadence path).

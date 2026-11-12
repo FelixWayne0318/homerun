@@ -7165,8 +7165,13 @@ async def record_signal_consumption(
     but the DB still guarantees consumed_at >= signal_sort_ts.
     """
     now = _now()
+    if now.tzinfo is not None:
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
     if signal_updated_at is not None:
-        consumed_at: Any = signal_updated_at if signal_updated_at > now else now
+        signal_updated_at_naive = signal_updated_at
+        if signal_updated_at_naive.tzinfo is not None:
+            signal_updated_at_naive = signal_updated_at_naive.astimezone(timezone.utc).replace(tzinfo=None)
+        consumed_at: Any = signal_updated_at_naive if signal_updated_at_naive > now else now
     else:
         # Resolve consumed_at in SQL so it is always >= signal_sort_ts
         # (coalesce(updated_at, created_at)) without a Python round-trip.

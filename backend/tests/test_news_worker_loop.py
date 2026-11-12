@@ -200,9 +200,24 @@ async def test_worker_retries_cycle_after_db_disconnect(monkeypatch):
     monkeypatch.setattr(news_worker, "recover_pool", recover_pool_mock)
     monkeypatch.setattr(news_worker, "_last_pool_recovery_at_monotonic", 0.0)
 
-    async def sleep_until_retry_finishes(_delay):
+    real_sleep = asyncio.sleep
+
+    async def sleep_until_retry_finishes(delay, *args, **kwargs):
         if run_cycle_mock.await_count >= 2:
             raise asyncio.CancelledError()
+        await real_sleep(min(delay, 0.01))
+
+    real_create_task = asyncio.create_task
+
+    def create_task(coro, *args, **kwargs):
+        if getattr(coro, "__qualname__", "").endswith("_mid_cycle_heartbeat"):
+            coro.close()
+            finished = asyncio.get_running_loop().create_future()
+            finished.set_result(None)
+            return finished
+        return real_create_task(coro, *args, **kwargs)
+
+    monkeypatch.setattr(news_worker.asyncio, "create_task", create_task)
 
     monkeypatch.setattr(
         news_worker.asyncio,

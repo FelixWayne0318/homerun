@@ -93,7 +93,7 @@ async def prune_stuck_skeletons(
             WHERE payload_json IS NULL
               AND runtime_sequence IS NULL
               AND status = 'pending'
-              AND created_at < now() - make_interval(secs => :max_age_seconds)
+              AND created_at < (now() AT TIME ZONE 'UTC') - make_interval(secs => :max_age_seconds)
             RETURNING id
             """
         ),

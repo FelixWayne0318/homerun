@@ -123,7 +123,7 @@ async def test_unconsumed_signals_default_to_pending_and_use_cursor(tmp_path):
             )
             assert after_consumption == []
 
-            s3.updated_at = s3.updated_at + timedelta(seconds=30)
+            s3.updated_at = s3.updated_at + timedelta(hours=1)
             await session.commit()
 
             refreshed = await list_unconsumed_trade_signals(
@@ -371,7 +371,7 @@ async def test_reactivated_signal_bypasses_cursor_when_updated_after_last_consum
                 outcome="skipped",
             )
 
-            reactivated_signal.updated_at = now + timedelta(seconds=20)
+            reactivated_signal.updated_at = now + timedelta(hours=1)
             await session.commit()
 
             await upsert_trader_signal_cursor(
@@ -509,7 +509,7 @@ async def test_consumed_selected_signal_requires_new_update_for_reentry(tmp_path
             )
             assert after_consumption == []
 
-            selected_signal.updated_at = selected_signal.updated_at + timedelta(seconds=15)
+            selected_signal.updated_at = selected_signal.updated_at + timedelta(hours=1)
             await session.commit()
 
             refreshed = await list_unconsumed_trade_signals(

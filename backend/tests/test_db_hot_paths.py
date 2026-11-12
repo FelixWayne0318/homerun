@@ -13,9 +13,19 @@ import services.insider_detector as insider_detector_module  # noqa: E402
 from models.database import Base, DiscoveredWallet, MarketCatalog  # noqa: E402
 from models.market import Event, Market  # noqa: E402
 from services.insider_detector import DEFAULT_RESCORE_MAX_WALLETS, InsiderDetectorService  # noqa: E402
+from services import shared_state  # noqa: E402
 from services.shared_state import read_market_catalog, write_market_catalog  # noqa: E402
 from tests.postgres_test_db import build_postgres_session_factory  # noqa: E402
 from utils.utcnow import utcnow  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_market_catalog_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        shared_state,
+        "_MARKET_CATALOG_FILE_PATH",
+        tmp_path / "market_catalog_latest.json",
+    )
 
 
 @pytest.mark.asyncio
@@ -72,6 +82,73 @@ async def test_market_catalog_storage_strips_nested_event_markets_and_relinks_on
     assert len(markets) == 2
     assert len(events) == 1
     assert [market.id for market in events[0].markets] == ["market-yes", "market-no"]
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_market_catalog_error_only_write_preserves_last_complete_snapshot():
+    engine, session_factory = await build_postgres_session_factory(Base, "market_catalog_error_only")
+
+    market_yes = Market(
+        id="market-yes",
+        condition_id="condition-yes",
+        question="Will Team A win?",
+        slug="team-a-win",
+        event_slug="event-1",
+        clob_token_ids=["yes-token", "no-token"],
+        outcome_prices=[0.55, 0.45],
+    )
+    market_no = Market(
+        id="market-no",
+        condition_id="condition-no",
+        question="Will Team A win?",
+        slug="team-a-win-2",
+        event_slug="event-1",
+        clob_token_ids=["yes-token-2", "no-token-2"],
+        outcome_prices=[0.60, 0.40],
+    )
+    event = Event(id="event-1", slug="event-1", title="Event One", markets=[market_yes, market_no])
+
+    async with session_factory() as session:
+        await write_market_catalog(session, [event], [market_yes, market_no], duration_seconds=12.5)
+
+    async with session_factory() as session:
+        row = (
+            await session.execute(select(MarketCatalog).where(MarketCatalog.id == "latest"))
+        ).scalar_one()
+        complete_updated_at = row.updated_at
+
+    shared_state._market_catalog_cache_invalidate()
+    async with session_factory() as session:
+        await write_market_catalog(
+            session,
+            [],
+            [],
+            error="Catalog refresh degraded; preserved previous catalog",
+        )
+
+    async with session_factory() as session:
+        row = (
+            await session.execute(select(MarketCatalog).where(MarketCatalog.id == "latest"))
+        ).scalar_one()
+        assert row.event_count == 1
+        assert row.market_count == 2
+        assert row.updated_at == complete_updated_at
+        assert row.error == "Catalog refresh degraded; preserved previous catalog"
+
+    shared_state._market_catalog_cache_invalidate()
+    async with session_factory() as session:
+        events, markets, metadata = await read_market_catalog(
+            session,
+            include_events=True,
+            include_markets=True,
+        )
+
+    assert metadata["event_count"] == 1
+    assert metadata["market_count"] == 2
+    assert len(markets) == 2
+    assert len(events) == 1
 
     await engine.dispose()
 

@@ -527,8 +527,11 @@ async def _resolve_market_context_overrides(
     async def _fetch_event(slug: str) -> tuple[str, Any]:
         async with semaphore:
             try:
-                event = await polymarket_client.get_event_by_slug(slug)
-            except Exception:
+                event = await asyncio.wait_for(
+                    polymarket_client.get_event_by_slug(slug),
+                    timeout=3.0,
+                )
+            except (asyncio.TimeoutError, Exception):
                 event = None
             return slug, event
 
@@ -689,8 +692,8 @@ async def _load_shared_backfill_market_history(
         await market_scanner.attach_price_history_to_opportunities(
             opportunities,
             now=datetime.now(timezone.utc),
-            timeout_seconds=12.0,
-            block_for_backfill=True,
+            timeout_seconds=0.0,
+            block_for_backfill=False,
         )
     except Exception:
         return {}
@@ -830,7 +833,7 @@ async def _attach_live_mid_prices_to_findings(
     if not token_pairs:
         return
 
-    live_prices = await get_live_mid_prices(unique_tokens)
+    live_prices = await get_live_mid_prices(unique_tokens, ws_only=True)
     if not live_prices:
         return
 
