@@ -556,6 +556,18 @@ async def _run_event_data_sources_once() -> tuple[
 async def _run_loop() -> None:
     logger.info("Events worker started")
 
+    async with AsyncSessionLocal() as session:
+        await write_worker_snapshot(
+            session,
+            "events",
+            running=True,
+            enabled=True,
+            current_activity="Events worker started; first collection pending.",
+            interval_seconds=int(settings.EVENTS_INTERVAL_SECONDS),
+            last_run_at=None,
+            last_error=None,
+        )
+
     from services.data_source_catalog import ensure_all_data_sources_seeded
     from services.data_source_loader import data_source_loader
 

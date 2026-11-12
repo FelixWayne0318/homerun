@@ -1,4 +1,6 @@
+import asyncio
 import sys
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -27,6 +29,49 @@ async def test_workers_status_returns_fallback_when_initial_refresh_is_busy(monk
     assert len(response["workers"]) == len(routes_workers.WORKER_DISPLAY_ORDER)
     assert {worker["worker_name"] for worker in response["workers"]} == set(routes_workers.WORKER_DISPLAY_ORDER)
     assert all(worker["current_activity"] == "Waiting for DB telemetry" for worker in response["workers"])
+
+
+@pytest.mark.asyncio
+async def test_cancel_stuck_workers_status_refresh_cancels_old_task(monkeypatch):
+    async def never_finish():
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(never_finish())
+    monkeypatch.setattr(routes_workers, "_workers_status_refresh_task", task)
+    monkeypatch.setattr(
+        routes_workers,
+        "_workers_status_refresh_started_at",
+        routes_workers.utcnow() - timedelta(seconds=30),
+    )
+    monkeypatch.setattr(routes_workers, "_WORKERS_STATUS_REFRESH_TIMEOUT_SECONDS", 10.0)
+
+    routes_workers._cancel_stuck_workers_status_refresh()
+    await asyncio.sleep(0)
+
+    assert task.cancelled()
+    assert routes_workers._workers_status_refresh_task is None
+    assert routes_workers._workers_status_refresh_started_at is None
+
+
+@pytest.mark.asyncio
+async def test_invalidate_workers_status_cache_drops_payload_and_cancels_refresh(monkeypatch):
+    async def never_finish():
+        await asyncio.sleep(60)
+
+    task = asyncio.create_task(never_finish())
+    monkeypatch.setattr(routes_workers, "_workers_status_cache", {"workers": []})
+    monkeypatch.setattr(routes_workers, "_workers_status_cache_updated_at", routes_workers.utcnow())
+    monkeypatch.setattr(routes_workers, "_workers_status_refresh_task", task)
+    monkeypatch.setattr(routes_workers, "_workers_status_refresh_started_at", routes_workers.utcnow())
+
+    routes_workers._invalidate_workers_status_cache()
+    await asyncio.sleep(0)
+
+    assert task.cancelled()
+    assert routes_workers._workers_status_cache is None
+    assert routes_workers._workers_status_cache_updated_at is None
+    assert routes_workers._workers_status_refresh_task is None
+    assert routes_workers._workers_status_refresh_started_at is None
 
 
 @pytest.mark.asyncio

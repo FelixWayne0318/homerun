@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -72,9 +72,11 @@ DB_RETRY_ATTEMPTS = 3
 DB_RETRY_BASE_DELAY_SECONDS = 0.2
 DB_RETRY_MAX_DELAY_SECONDS = 1.5
 _WORKERS_STATUS_CACHE_TTL_SECONDS = 5.0
+_WORKERS_STATUS_REFRESH_TIMEOUT_SECONDS = 10.0
 _workers_status_cache: dict | None = None
 _workers_status_cache_updated_at: datetime | None = None
 _workers_status_refresh_task: asyncio.Task | None = None
+_workers_status_refresh_started_at: datetime | None = None
 
 
 from utils.retry import is_retryable_db_error as _is_retryable_db_error  # noqa: E402
@@ -237,7 +239,30 @@ async def _collect_workers(session: AsyncSession) -> list[dict]:
                     "requested_run_at": None,
                 },
             )
-        detail.append(summarize_worker_snapshot(snapshot))
+        control = snapshot.get("control")
+        if isinstance(control, dict) and "is_enabled" in control:
+            snapshot["enabled"] = bool(control.get("is_enabled"))
+        summary = summarize_worker_snapshot(snapshot)
+        updated_at = summary.get("updated_at")
+        if summary.get("running") and updated_at:
+            if isinstance(updated_at, str):
+                try:
+                    updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                except ValueError:
+                    updated_at = None
+            if isinstance(updated_at, datetime) and updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            if isinstance(updated_at, datetime):
+                interval = float(summary.get("interval_seconds") or 60)
+                stale_after = max(120.0, interval * 3.0)
+                age = (utcnow() - updated_at).total_seconds()
+                if age > stale_after:
+                    summary["running"] = False
+                    summary["stale"] = True
+                    summary["current_activity"] = (
+                        f"Stale heartbeat: last update {int(age)}s ago"
+                    )
+        detail.append(summary)
     return detail
 
 
@@ -292,6 +317,40 @@ def _workers_status_fallback_payload() -> dict:
     return {"workers": workers}
 
 
+def _cancel_stuck_workers_status_refresh() -> None:
+    global _workers_status_refresh_task, _workers_status_refresh_started_at
+    task = _workers_status_refresh_task
+    if task is None or task.done():
+        return
+    if _workers_status_refresh_started_at is None:
+        _workers_status_refresh_started_at = utcnow()
+        return
+    age = (utcnow() - _workers_status_refresh_started_at).total_seconds()
+    if age <= _WORKERS_STATUS_REFRESH_TIMEOUT_SECONDS:
+        return
+    task.cancel()
+    _workers_status_refresh_task = None
+    _workers_status_refresh_started_at = None
+
+
+def _invalidate_workers_status_cache() -> None:
+    """Drop the status cache after a control write.
+
+    A write changes the persisted snapshot immediately, so any cached payload
+    -- and any refresh already in flight that read the pre-write state -- is
+    stale. Without this, the UI kept showing the previous pause/enable state
+    for up to the cache TTL after every operator action.
+    """
+    global _workers_status_cache, _workers_status_cache_updated_at, _workers_status_refresh_task, _workers_status_refresh_started_at
+    task = _workers_status_refresh_task
+    if task is not None and not task.done():
+        task.cancel()
+    _workers_status_refresh_task = None
+    _workers_status_refresh_started_at = None
+    _workers_status_cache = None
+    _workers_status_cache_updated_at = None
+
+
 async def _set_all_workers_paused(session: AsyncSession, paused: bool) -> None:
     await shared_state.set_scanner_paused(session, paused)
     await news_shared_state.set_news_paused(session, paused)
@@ -318,10 +377,12 @@ async def _set_all_workers_paused(session: AsyncSession, paused: bool) -> None:
         global_pause_state.pause()
     else:
         global_pause_state.resume()
+    _invalidate_workers_status_cache()
 
 
 async def get_workers_status_cached_or_fallback() -> dict:
-    global _workers_status_cache, _workers_status_cache_updated_at, _workers_status_refresh_task
+    global _workers_status_cache, _workers_status_cache_updated_at, _workers_status_refresh_task, _workers_status_refresh_started_at
+    _cancel_stuck_workers_status_refresh()
     if _workers_status_refresh_task is not None and _workers_status_refresh_task.done():
         try:
             _workers_status_cache = _workers_status_refresh_task.result()
@@ -330,6 +391,7 @@ async def get_workers_status_cached_or_fallback() -> dict:
             pass
         finally:
             _workers_status_refresh_task = None
+            _workers_status_refresh_started_at = None
     if (
         _workers_status_cache is not None
         and _workers_status_cache_updated_at is not None
@@ -341,12 +403,14 @@ async def get_workers_status_cached_or_fallback() -> dict:
             _refresh_workers_status_payload(),
             name="workers-status-refresh",
         )
+        _workers_status_refresh_started_at = utcnow()
     return _workers_status_cache or _workers_status_fallback_payload()
 
 
 @router.get("/status")
 async def get_workers_status():
-    global _workers_status_cache, _workers_status_cache_updated_at, _workers_status_refresh_task
+    global _workers_status_cache, _workers_status_cache_updated_at, _workers_status_refresh_task, _workers_status_refresh_started_at
+    _cancel_stuck_workers_status_refresh()
     if _workers_status_refresh_task is not None and _workers_status_refresh_task.done():
         try:
             _workers_status_cache = _workers_status_refresh_task.result()
@@ -355,6 +419,7 @@ async def get_workers_status():
             pass
         finally:
             _workers_status_refresh_task = None
+            _workers_status_refresh_started_at = None
     if (
         _workers_status_cache is not None
         and _workers_status_cache_updated_at is not None
@@ -366,6 +431,7 @@ async def get_workers_status():
             _refresh_workers_status_payload(),
             name="workers-status-refresh",
         )
+        _workers_status_refresh_started_at = utcnow()
         if _workers_status_cache is not None:
             return _workers_status_cache
     try:
@@ -373,10 +439,12 @@ async def get_workers_status():
         _workers_status_cache = payload
         _workers_status_cache_updated_at = utcnow()
         _workers_status_refresh_task = None
+        _workers_status_refresh_started_at = None
         return payload
     except Exception as exc:
         if _workers_status_refresh_task is not None and _workers_status_refresh_task.done():
             _workers_status_refresh_task = None
+            _workers_status_refresh_started_at = None
         if _workers_status_cache is not None:
             return _workers_status_cache
         if isinstance(exc, (asyncio.TimeoutError, HTTPException)):
@@ -432,6 +500,7 @@ async def start_worker(worker: str, session: AsyncSession = Depends(get_db_sessi
     else:
         await set_worker_paused(session, name, False)
 
+    _invalidate_workers_status_cache()
     return {"status": "started", "worker": await _worker_detail(session, name)}
 
 
@@ -460,6 +529,7 @@ async def pause_worker(worker: str, session: AsyncSession = Depends(get_db_sessi
     else:
         await set_worker_paused(session, name, True)
 
+    _invalidate_workers_status_cache()
     return {"status": "paused", "worker": await _worker_detail(session, name)}
 
 
@@ -502,6 +572,7 @@ async def set_worker_master_enabled(
             ),
         )
 
+    _invalidate_workers_status_cache()
     return {
         "status": "enabled" if enabled else "disabled",
         "worker": await _worker_detail(session, name),
@@ -532,6 +603,7 @@ async def run_worker_once(worker: str, session: AsyncSession = Depends(get_db_se
     else:
         await request_worker_run(session, name)
 
+    _invalidate_workers_status_cache()
     return {"status": "queued", "worker": await _worker_detail(session, name)}
 
 
@@ -557,4 +629,5 @@ async def set_worker_run_interval(
     else:
         await set_worker_interval(session, name, interval_seconds)
 
+    _invalidate_workers_status_cache()
     return {"status": "updated", "worker": await _worker_detail(session, name)}
