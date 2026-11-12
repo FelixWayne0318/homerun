@@ -26,6 +26,8 @@
 ![Homerun Dashboard — Market Scanner](./screenshots/dashboard-scanner.png)
 
 > 中文用户：先读 [使用教程（小白版）](docs/使用教程-小白版.md)，从启动、沙盒下单到回测和故障处理都有分步说明。
+>
+> 本机当前部署口径为 **Polymarket 单平台**：Kalshi 跨平台策略已主动停用，避免在出口不可达时反复超时；需要双平台能力时，先完成网络出口与 Kalshi 行情验收，再重新启用策略。
 
 ## Why Homerun
 
