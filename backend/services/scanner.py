@@ -1621,8 +1621,8 @@ class ArbitrageScanner:
         filtered: list[Opportunity] = []
         for opp in opportunities:
             opp_seen_dt = _make_aware(
-                getattr(opp, "last_detected_at", None)
-                or getattr(opp, "last_seen_at", None)
+                getattr(opp, "last_seen_at", None)
+                or getattr(opp, "last_detected_at", None)
                 or getattr(opp, "detected_at", None)
             )
             opp_seen_ts = opp_seen_dt.timestamp() if opp_seen_dt is not None else None
@@ -1765,8 +1765,8 @@ class ArbitrageScanner:
             )
             if stale_market_found:
                 seen_at = _make_aware(
-                    getattr(opp, "last_detected_at", None)
-                    or getattr(opp, "last_seen_at", None)
+                    getattr(opp, "last_seen_at", None)
+                    or getattr(opp, "last_detected_at", None)
                     or getattr(opp, "detected_at", None)
                 )
                 if seen_at is None or (now_dt - seen_at).total_seconds() > detected_retention_seconds:
@@ -3116,10 +3116,10 @@ class ArbitrageScanner:
                         await self._hydrate_catalog_from_db()
                     except Exception as hydrate_exc:
                         logger.debug("Catalog refresh cache hydration fallback failed", exc_info=hydrate_exc)
-                if not events and self._cached_events:
+                if ("events" in core_fetch_failures or not events) and self._cached_events:
                     events = list(self._cached_events)
                     fallback_labels.append("events")
-                if not markets and self._cached_markets:
+                if ("markets" in core_fetch_failures or not markets) and self._cached_markets:
                     markets = list(self._cached_markets)
                     fallback_labels.append("markets")
                 if not events and not markets:
@@ -3271,15 +3271,33 @@ class ArbitrageScanner:
                 from services.shared_state import write_market_catalog
 
                 async with AsyncSessionLocal() as session:
-                    await asyncio.wait_for(
-                        write_market_catalog(
-                            session,
-                            events,
-                            markets,
-                            duration_seconds=duration,
-                        ),
-                        timeout=persist_timeout,
-                    )
+                    if core_fetch_failures:
+                        # A degraded refresh must not replace the last complete
+                        # catalog snapshot. Record the failure without writing
+                        # the partial/fallback payload.
+                        await asyncio.wait_for(
+                            write_market_catalog(
+                                session,
+                                [],
+                                [],
+                                duration_seconds=duration,
+                                error=(
+                                    "Catalog refresh degraded; preserved previous catalog "
+                                    f"(failures={sorted(core_fetch_failures.keys())})"
+                                ),
+                            ),
+                            timeout=persist_timeout,
+                        )
+                    else:
+                        await asyncio.wait_for(
+                            write_market_catalog(
+                                session,
+                                events,
+                                markets,
+                                duration_seconds=duration,
+                            ),
+                            timeout=persist_timeout,
+                        )
             except Exception as e:
                 logger.warning(f"  Catalog DB persist failed (non-fatal): {e}", exc_info=e)
 
@@ -3292,11 +3310,23 @@ class ArbitrageScanner:
                 self._background_tasks.add(t)
                 t.add_done_callback(self._background_tasks.discard)
 
-            logger.info(
-                f"Catalog refresh complete: "
-                f"{len(events)} events, {len(markets)} markets in {duration:.1f}s"
-            )
-            await self._set_activity(f"Catalog refresh complete — {len(events)} events, {len(markets)} markets")
+            if core_fetch_failures:
+                logger.warning(
+                    "Catalog refresh degraded; preserved previous catalog snapshot "
+                    f"(working set {len(events)} events, {len(markets)} markets) in {duration:.1f}s"
+                )
+                await self._set_activity(
+                    "Catalog refresh degraded — preserved previous catalog "
+                    f"({len(events)} events working set)"
+                )
+            else:
+                logger.info(
+                    f"Catalog refresh complete: "
+                    f"{len(events)} events, {len(markets)} markets in {duration:.1f}s"
+                )
+                await self._set_activity(
+                    f"Catalog refresh complete — {len(events)} events, {len(markets)} markets"
+                )
             return len(markets)
 
         except Exception as e:
@@ -5426,7 +5456,7 @@ class ArbitrageScanner:
         self._opportunities = [
             opp
             for opp in self._opportunities
-            if _make_aware(opp.last_detected_at or opp.last_seen_at or opp.detected_at) >= cutoff
+            if _make_aware(opp.last_seen_at or opp.last_detected_at or opp.detected_at) >= cutoff
         ]
 
         removed = before_count - len(self._opportunities)

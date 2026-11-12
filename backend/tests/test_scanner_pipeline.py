@@ -23,6 +23,14 @@ from models.opportunity import (
 from services.data_events import EventType
 
 
+@pytest.fixture(autouse=True)
+def _isolate_catalog_persistence(monkeypatch):
+    monkeypatch.setattr(
+        "services.shared_state.write_market_catalog",
+        AsyncMock(return_value=None),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers to build a scanner with mocked externals
 # ---------------------------------------------------------------------------
@@ -267,7 +275,7 @@ class TestScanPipeline:
         mock_polymarket_client.get_all_markets.assert_awaited_once_with(active=True)
 
     @pytest.mark.asyncio
-    async def test_refresh_catalog_uses_partial_upstream_results_when_one_core_fetch_times_out(
+    async def test_refresh_catalog_does_not_persist_partial_catalog_when_one_core_fetch_times_out(
         self,
         mock_polymarket_client,
     ):
@@ -290,6 +298,7 @@ class TestScanPipeline:
 
         with (
             patch.object(scanner, "_ensure_runtime_strategies_loaded", new_callable=AsyncMock),
+            patch.object(scanner, "_hydrate_catalog_from_db", new_callable=AsyncMock, return_value=0),
             patch.object(scanner, "_set_activity", new_callable=AsyncMock),
             patch("services.scanner.settings.WS_FEED_ENABLED", False),
             patch("services.scanner.settings.NEWS_EDGE_ENABLED", False),
@@ -299,6 +308,15 @@ class TestScanPipeline:
         assert market_count == 1
         assert len(scanner._cached_markets) == 1
         assert scanner._cached_markets[0].id == "market-timeout-fallback"
+
+        from services import shared_state
+
+        persist = shared_state.write_market_catalog
+        persist.assert_awaited_once()
+        _, events_payload, markets_payload = persist.await_args.args
+        assert events_payload == []
+        assert markets_payload == []
+        assert "degraded" in str(persist.await_args.kwargs.get("error") or "").lower()
 
 
 @pytest.mark.asyncio
@@ -348,6 +366,107 @@ async def test_enqueue_detection_batch_publishes_runtime_signals_when_snapshot_p
     assert dropped == 0
     bridge_mock.assert_awaited_once()
     snapshot_mock.assert_awaited_once()
+    clear_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_detection_batch_persists_snapshot_when_signal_publish_times_out(monkeypatch):
+    from workers import scanner_worker
+
+    class _Session:
+        pass
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return _Session()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    opportunity = SimpleNamespace(
+        stable_id="scanner-opp-timeout",
+        id="scanner-opp-timeout",
+        strategy="basic",
+        markets=[],
+    )
+    bridge_mock = AsyncMock(side_effect=asyncio.TimeoutError)
+    snapshot_mock = AsyncMock(return_value=None)
+    clear_mock = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(scanner_worker, "AsyncSessionLocal", lambda: _SessionContext())
+    monkeypatch.setattr(scanner_worker, "bridge_opportunities_to_signals", bridge_mock)
+    monkeypatch.setattr(scanner_worker, "write_scanner_snapshot", snapshot_mock)
+    monkeypatch.setattr(scanner_worker, "clear_scan_request", clear_mock)
+    monkeypatch.setattr(scanner_worker, "is_db_pressure_active", lambda: False)
+    monkeypatch.setattr(
+        scanner_worker.quality_filter,
+        "evaluate_opportunity",
+        lambda opportunity, overrides=None: {"passed": True, "overrides": overrides, "id": opportunity.stable_id},
+    )
+    monkeypatch.setattr(scanner_worker.strategy_loader, "get_instance", lambda _strategy: None)
+
+    batch_id, pending, dropped = await scanner_worker._enqueue_detection_batch(
+        [opportunity],
+        {"running": True},
+        batch_kind="startup",
+        quality_reports={},
+    )
+
+    assert batch_id
+    assert pending == 0
+    assert dropped == 0
+    snapshot_mock.assert_awaited_once()
+    clear_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_detection_batch_can_skip_sweep_and_snapshot_for_startup_restore(monkeypatch):
+    from workers import scanner_worker
+
+    class _Session:
+        pass
+
+    class _SessionContext:
+        async def __aenter__(self):
+            return _Session()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    opportunity = SimpleNamespace(
+        stable_id="scanner-opp-restored",
+        id="scanner-opp-restored",
+        strategy="basic",
+        markets=[],
+    )
+    bridge_mock = AsyncMock(return_value=1)
+    snapshot_mock = AsyncMock(return_value=None)
+    clear_mock = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(scanner_worker, "AsyncSessionLocal", lambda: _SessionContext())
+    monkeypatch.setattr(scanner_worker, "bridge_opportunities_to_signals", bridge_mock)
+    monkeypatch.setattr(scanner_worker, "write_scanner_snapshot", snapshot_mock)
+    monkeypatch.setattr(scanner_worker, "clear_scan_request", clear_mock)
+    monkeypatch.setattr(scanner_worker, "is_db_pressure_active", lambda: False)
+    monkeypatch.setattr(
+        scanner_worker.quality_filter,
+        "evaluate_opportunity",
+        lambda opportunity, overrides=None: {"passed": True, "overrides": overrides, "id": opportunity.stable_id},
+    )
+    monkeypatch.setattr(scanner_worker.strategy_loader, "get_instance", lambda _strategy: None)
+
+    batch_id, pending, dropped = await scanner_worker._enqueue_detection_batch(
+        [opportunity],
+        {"running": True},
+        batch_kind="startup",
+        quality_reports={},
+        sweep_missing=False,
+        persist_snapshot=False,
+    )
+
+    assert batch_id
+    assert bridge_mock.await_args.kwargs["sweep_missing"] is False
+    snapshot_mock.assert_not_awaited()
     clear_mock.assert_awaited_once()
 
     @pytest.mark.asyncio

@@ -36,6 +36,9 @@ from services.traders_copy_trade_signal_service import traders_copy_trade_signal
 from services.worker_state import list_worker_snapshots
 from services.ws_feeds import get_feed_manager
 from utils.logger import get_logger, setup_logging
+from utils.network_overrides import install_polymarket_dns_override
+
+install_polymarket_dns_override()
 from utils.utcnow import utcnow
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -1448,8 +1451,13 @@ class WorkerHost:
                 if grace_until is not None:
                     grace_elapsed = mono_now - grace_until
                     worker_interval = max(1, int((snapshot_by_name.get(_worker_name_from_module(module_name)) or {}).get("interval_seconds") or 60))
-                    # Give 2× the worker interval plus 60s buffer
-                    grace_period = worker_interval * 2 + 60
+                    # Give the worker its full stale window before restarting it
+                    # again.  A fixed 2× interval is too short for workers whose
+                    # first cycle is legitimately slow (tracked_traders spends
+                    # minutes in wallet_intelligence.initialize()).
+                    grace_period = max(180, worker_interval * 6) + 60
+                    if _worker_name_from_module(module_name) == "tracked_traders":
+                        grace_period = max(grace_period, 960)
                     if grace_elapsed < grace_period:
                         continue
                     else:
@@ -1999,8 +2007,10 @@ class WorkerHost:
 
         await self._initialize_services()
 
+        import time as _time
         for module_name in self._worker_modules:
             self._worker_tasks[module_name] = await self._spawn_worker_task(module_name)
+            self._restart_grace[module_name] = _time.monotonic()
             self._worker_monitors.append(
                 asyncio.create_task(
                     self._monitor_worker_task(module_name),

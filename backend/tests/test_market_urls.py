@@ -1,4 +1,5 @@
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -117,3 +118,58 @@ def test_attach_market_links_keeps_api_url_and_fills_platform_links():
     assert enriched["kalshi_url"] == "https://kalshi.com/markets/kxelonmars"
     assert enriched["markets"][0]["url"] == enriched["polymarket_url"]
     assert enriched["markets"][1]["url"] == enriched["kalshi_url"]
+
+
+def test_attach_market_links_recomputes_price_age_at_read_time():
+    observed_at = datetime.now(timezone.utc) - timedelta(seconds=95)
+    enriched = attach_market_links_to_opportunity_dict(
+        {
+            "markets": [
+                {
+                    "platform": "polymarket",
+                    "price_updated_at": observed_at.isoformat().replace("+00:00", "Z"),
+                    "price_age_seconds": 1.0,
+                }
+            ]
+        }
+    )
+
+    age = enriched["markets"][0]["price_age_seconds"]
+    assert 94 <= age <= 96
+    assert enriched["markets"][0]["is_price_fresh"] is False
+
+
+def test_attach_market_links_marks_recent_price_as_fresh():
+    observed_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+    enriched = attach_market_links_to_opportunity_dict(
+        {
+            "markets": [
+                {
+                    "platform": "polymarket",
+                    "price_updated_at": observed_at.isoformat().replace("+00:00", "Z"),
+                    "price_age_seconds": 100.0,
+                    "is_price_fresh": False,
+                }
+            ]
+        }
+    )
+
+    age = enriched["markets"][0]["price_age_seconds"]
+    assert 4 <= age <= 6
+    assert enriched["markets"][0]["is_price_fresh"] is True
+
+
+def test_attach_market_links_leaves_price_age_for_non_timestamp_payload():
+    enriched = attach_market_links_to_opportunity_dict(
+        {
+            "markets": [
+                {
+                    "platform": "polymarket",
+                    "price_updated_at": "not-a-timestamp",
+                    "price_age_seconds": 7.5,
+                }
+            ]
+        }
+    )
+
+    assert enriched["markets"][0]["price_age_seconds"] == 7.5

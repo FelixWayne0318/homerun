@@ -53,6 +53,7 @@ from utils.utcnow import utcnow
 
 logger = get_logger("scanner_worker")
 _CANCEL_GRACE_SECONDS = 5.0
+_ENQUEUE_PUBLISH_TIMEOUT_SECONDS = 45.0
 _abandoned_tasks: set[asyncio.Task] = set()
 _inflight_timed_tasks: dict[str, asyncio.Task] = {}
 _last_pressure_snapshot_skip_log_at = 0.0
@@ -69,6 +70,54 @@ _last_pressure_heavy_skip_log_at = 0.0
 # (no scan -> no signals -> no orchestrator decisions -> no terminal
 # updates) — the exact regression the A.1/A.2 plane split surfaced.
 _SCAN_PATH_PRESSURE_COMPONENTS = frozenset({"scanner_snapshot", "scanner_enqueue"})
+
+
+def _current_rss_mb() -> float:
+    """Return the process's current resident set size in MB."""
+    try:
+        import subprocess
+        import sys
+
+        if sys.platform == "win32":
+            import ctypes
+            import ctypes.wintypes
+
+            class _PMC(ctypes.Structure):
+                _fields_ = [
+                    ("cb", ctypes.wintypes.DWORD),
+                    ("PageFaultCount", ctypes.wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            pmc = _PMC()
+            pmc.cb = ctypes.sizeof(_PMC)
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            if ctypes.windll.psapi.GetProcessMemoryInfo(
+                handle, ctypes.byref(pmc), pmc.cb
+            ):
+                return float(pmc.WorkingSetSize) / (1024 * 1024)
+
+        output = subprocess.check_output(
+            ["ps", "-o", "rss=", "-p", str(os.getpid())],
+            text=True,
+            timeout=2,
+        ).strip()
+        return float(output.split()[0]) / 1024.0
+    except Exception:
+        try:
+            import resource
+
+            value = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+            return value / (1024 * 1024) if os.uname().sysname == "Darwin" else value / 1024.0
+        except Exception:
+            return 0.0
 
 
 def _scan_path_under_pressure() -> bool:
@@ -190,6 +239,7 @@ async def _hydrate_scanner_pool_from_snapshot() -> int:
             if resolution_date <= now:
                 dropped_expired += 1
                 continue
+        opp.last_seen_at = now
         restored.append(opp)
 
     scanner._opportunities = restored
@@ -249,6 +299,8 @@ async def _enqueue_detection_batch(
     *,
     batch_kind: str,
     quality_reports: Optional[dict] = None,
+    sweep_missing: bool = True,
+    persist_snapshot: bool = True,
 ) -> tuple[str | None, int, int]:
     """Persist scanner truth and emit runtime signals directly."""
     global _last_pressure_snapshot_skip_log_at
@@ -262,13 +314,24 @@ async def _enqueue_detection_batch(
             overrides = getattr(strategy_instance, "quality_filter_overrides", None) if strategy_instance else None
             effective_quality_reports[stable_id] = quality_filter.evaluate_opportunity(opportunity, overrides=overrides)
 
-    await bridge_opportunities_to_signals(
-        opportunities,
-        source="scanner",
-        quality_reports=effective_quality_reports,
-        sweep_missing=True,
-        refresh_prices=False,
-    )
+    try:
+        await asyncio.wait_for(
+            bridge_opportunities_to_signals(
+                opportunities,
+                source="scanner",
+                quality_reports=effective_quality_reports,
+                sweep_missing=sweep_missing,
+                refresh_prices=False,
+            ),
+            timeout=_ENQUEUE_PUBLISH_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Scanner signal publish timed out; continuing with snapshot persist",
+            timeout_seconds=_ENQUEUE_PUBLISH_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        logger.exception("Scanner signal publish failed; continuing with snapshot persist")
 
     if is_db_pressure_active():
         now_mono = time.monotonic()
@@ -278,7 +341,7 @@ async def _enqueue_detection_batch(
                 db_pressure=db_pressure_snapshot(),
             )
             _last_pressure_snapshot_skip_log_at = now_mono
-    else:
+    elif persist_snapshot:
         try:
             async with AsyncSessionLocal() as session:
                 await write_scanner_snapshot(
@@ -391,37 +454,7 @@ async def _run_scan_loop() -> None:
                     )
 
                 # Process memory + scanner data structure monitoring
-                try:
-                    import resource as _resource
-                    rss_mb = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss / 1024
-                except Exception:
-                    try:
-                        import ctypes
-                        import ctypes.wintypes
-                        _k32 = ctypes.windll.kernel32
-                        class _PMC(ctypes.Structure):
-                            _fields_ = [
-                                ("cb", ctypes.wintypes.DWORD),
-                                ("PageFaultCount", ctypes.wintypes.DWORD),
-                                ("PeakWorkingSetSize", ctypes.c_size_t),
-                                ("WorkingSetSize", ctypes.c_size_t),
-                                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
-                                ("QuotaPagedPoolUsage", ctypes.c_size_t),
-                                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
-                                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
-                                ("PagefileUsage", ctypes.c_size_t),
-                                ("PeakPagefileUsage", ctypes.c_size_t),
-                            ]
-                        _psapi = ctypes.windll.psapi
-                        pmc = _PMC()
-                        pmc.cb = ctypes.sizeof(_PMC)
-                        handle = _k32.GetCurrentProcess()
-                        if _psapi.GetProcessMemoryInfo(handle, ctypes.byref(pmc), pmc.cb):
-                            rss_mb = pmc.WorkingSetSize / (1024 * 1024)
-                        else:
-                            rss_mb = 0
-                    except Exception:
-                        rss_mb = 0
+                rss_mb = _current_rss_mb()
 
                 if rss_mb > _mem_warn_threshold_mb:
                     logger.warning(
@@ -503,6 +536,8 @@ async def _run_scan_loop() -> None:
             startup_status,
             batch_kind="startup",
             quality_reports=getattr(scanner, "quality_reports", {}) or {},
+            sweep_missing=False,
+            persist_snapshot=False,
         )
         heartbeat_state["queue_pending"] = pending
         heartbeat_state["dropped_batches"] = int(heartbeat_state.get("dropped_batches", 0) or 0) + dropped
@@ -794,6 +829,8 @@ async def _run_scan_loop() -> None:
                         status,
                         batch_kind=batch_kind,
                         quality_reports=getattr(scanner, "quality_reports", {}) or {},
+                        sweep_missing=scan_error is None,
+                        persist_snapshot=scan_error is None,
                     )
                     heartbeat_state["queue_pending"] = pending
                     heartbeat_state["dropped_batches"] = (

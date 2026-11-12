@@ -112,6 +112,10 @@ from services.weather import shared_state as weather_shared_state
 from services.worker_state import list_worker_snapshots, read_worker_control, summarize_worker_stats
 from services.ui_lock import UI_LOCK_SESSION_COOKIE, ui_lock_service
 from utils.logger import setup_logging, get_logger
+
+from utils.network_overrides import install_polymarket_dns_override
+
+install_polymarket_dns_override()
 from utils.rate_limiter import rate_limiter, TokenBucket
 
 register_all_models()

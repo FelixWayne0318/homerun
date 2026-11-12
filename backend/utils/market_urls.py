@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, MutableMapping
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
+
+from config import settings
 
 POLYMARKET_BASE_URL = "https://polymarket.com"
 KALSHI_BASE_URL = "https://kalshi.com"
@@ -185,6 +188,33 @@ def _clean_absolute_url(value: Any) -> str:
     return ""
 
 
+def _refresh_market_price_age(market: MutableMapping[str, Any]) -> None:
+    raw = market.get("price_updated_at")
+    if raw is None:
+        return
+    try:
+        if isinstance(raw, (int, float)):
+            updated_ts = float(raw)
+            if updated_ts > 1_000_000_000_000:
+                updated_ts /= 1000.0
+        else:
+            text = str(raw).strip()
+            if not text:
+                return
+            updated = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if updated.tzinfo is None:
+                updated = updated.replace(tzinfo=timezone.utc)
+            updated_ts = updated.astimezone(timezone.utc).timestamp()
+        age_seconds = float(
+            round(max(0.0, datetime.now(timezone.utc).timestamp() - updated_ts), 3)
+        )
+        market["price_age_seconds"] = age_seconds
+        threshold = float(getattr(settings, "SCANNER_MARKET_PRICE_MAX_AGE_SECONDS", 90) or 90)
+        market["is_price_fresh"] = age_seconds <= threshold
+    except (TypeError, ValueError):
+        return
+
+
 def attach_market_links_to_opportunity_dict(
     opportunity: MutableMapping[str, Any] | Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -206,6 +236,7 @@ def attach_market_links_to_opportunity_dict(
         market_dict = dict(market_entry)
         platform = infer_market_platform(market_dict)
         market_dict["platform"] = platform
+        _refresh_market_price_age(market_dict)
 
         market_url = _clean_absolute_url(market_dict.get("url") or market_dict.get("market_url"))
         if not market_url:
