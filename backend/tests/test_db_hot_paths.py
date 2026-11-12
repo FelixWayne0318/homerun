@@ -154,6 +154,74 @@ async def test_market_catalog_error_only_write_preserves_last_complete_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_market_catalog_degraded_partial_write_preserves_last_complete_snapshot():
+    engine, session_factory = await build_postgres_session_factory(Base, "market_catalog_degraded_partial")
+
+    complete_market = Market(
+        id="market-complete",
+        condition_id="condition-complete",
+        question="Will Team A win?",
+        slug="team-a-complete",
+        event_slug="event-complete",
+        clob_token_ids=["yes-complete", "no-complete"],
+        outcome_prices=[0.55, 0.45],
+    )
+    complete_event = Event(
+        id="event-complete",
+        slug="event-complete",
+        title="Complete Event",
+        markets=[complete_market],
+    )
+    partial_market = Market(
+        id="market-partial",
+        condition_id="condition-partial",
+        question="Will Team B win?",
+        slug="team-b-partial",
+        event_slug="event-partial",
+        clob_token_ids=["yes-partial", "no-partial"],
+        outcome_prices=[0.30, 0.70],
+    )
+    partial_event = Event(
+        id="event-partial",
+        slug="event-partial",
+        title="Partial Event",
+        markets=[partial_market],
+    )
+
+    async with session_factory() as session:
+        await write_market_catalog(session, [complete_event], [complete_market], duration_seconds=10.0)
+
+    async with session_factory() as session:
+        row = (
+            await session.execute(select(MarketCatalog).where(MarketCatalog.id == "latest"))
+        ).scalar_one()
+        complete_updated_at = row.updated_at
+        complete_event_count = row.event_count
+        complete_market_count = row.market_count
+
+    shared_state._market_catalog_cache_invalidate()
+    async with session_factory() as session:
+        await write_market_catalog(
+            session,
+            [partial_event],
+            [partial_market],
+            duration_seconds=1.0,
+            error="Catalog refresh degraded; preserved previous catalog",
+        )
+
+    async with session_factory() as session:
+        row = (
+            await session.execute(select(MarketCatalog).where(MarketCatalog.id == "latest"))
+        ).scalar_one()
+        assert row.event_count == complete_event_count
+        assert row.market_count == complete_market_count
+        assert row.updated_at == complete_updated_at
+        assert row.error == "Catalog refresh degraded; preserved previous catalog"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_insider_rescore_limits_default_batch_and_persists_updates(monkeypatch):
     engine, session_factory = await build_postgres_session_factory(Base, "insider_rescore_batch")
     monkeypatch.setattr(insider_detector_module, "AsyncSessionLocal", session_factory)
