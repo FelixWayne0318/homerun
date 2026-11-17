@@ -46,6 +46,11 @@ IN_CLAUSE_CHUNK_SIZE = 2000
 ACTIVITY_INSERT_CHUNK_SIZE = 1000
 POOL_RECOMPUTE_MERGE_BATCH_SIZE = 64
 
+# Confluence rows older than this are expired leftovers, not trade signals.
+# Without the cutoff the firehose re-emits multi-hour-old rows every cycle and
+# every downstream copy-trade gate rejects them on signal age.
+FIREHOSE_MAX_SIGNAL_AGE_MINUTES = 120
+
 
 def _is_bind_limit_error(exc: Exception) -> bool:
     return "number of query arguments cannot exceed 32767" in str(exc).lower()
@@ -732,6 +737,10 @@ class SmartWalletPoolService:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
                 select(MarketConfluenceSignal)
+                .where(
+                    MarketConfluenceSignal.last_seen_at
+                    >= as_utc_naive(utcnow()) - timedelta(minutes=FIREHOSE_MAX_SIGNAL_AGE_MINUTES)
+                )
                 .order_by(
                     MarketConfluenceSignal.is_active.desc(),
                     MarketConfluenceSignal.last_seen_at.desc(),

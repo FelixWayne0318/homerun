@@ -247,8 +247,8 @@ class Settings(BaseSettings):
     # backend-response latency, below the WAL/fsync layer).  Adding
     # more pool slots just queues more concurrent slow round-trips
     # without raising throughput.  Reverted to the prior values.
-    DATABASE_WORKER_POOL_SIZE: int = 80
-    DATABASE_WORKER_MAX_OVERFLOW: int = 10
+    DATABASE_WORKER_POOL_SIZE: int = 16
+    DATABASE_WORKER_MAX_OVERFLOW: int = 8
     DATABASE_POOL_TIMEOUT_SECONDS: int = 30
     DATABASE_POOL_RECYCLE_SECONDS: int = 300
     DATABASE_CONNECT_TIMEOUT_SECONDS: float = 8.0
