@@ -92,6 +92,7 @@ CHILD_FILLED = "filled"
 CHILD_PARTIAL = "partial"
 CHILD_CANCELLED = "cancelled"
 CHILD_FAILED = "failed"
+_MAX_EXIT_SUBMIT_ATTEMPTS = 3
 CHILD_ESCALATED = "escalated"
 
 _TERMINAL_CHILD_STATES = {CHILD_FILLED, CHILD_CANCELLED}
@@ -876,10 +877,24 @@ async def submit_child_order(
         child["status"] = CHILD_SUBMITTED
         child["submitted_at"] = child.get("submitted_at") or _iso_utc(now)
     else:
+        error_text = str(getattr(result, "error_message", None) or f"submit_status:{status or 'unknown'}")
+        child["last_error"] = error_text
         child["status"] = CHILD_FAILED
-        child["last_error"] = (
-            getattr(result, "error_message", None) or f"submit_status:{status or 'unknown'}"
-        )
+        # FAK exits have no resting order, so an "nothing to match" rejection
+        # means the ladder would otherwise strand the position forever: the
+        # failed child is never picked again. Requeue it as planned with a
+        # price stepped one cent toward the market, bounded so a dead book
+        # cannot hammer the venue or walk the exit price to zero.
+        attempts = int(child.get("submit_attempts") or 0) + 1
+        child["submit_attempts"] = attempts
+        if (
+            str(side).strip().upper() == "SELL"
+            and "no orders found to match" in error_text.lower()
+            and attempts < _MAX_EXIT_SUBMIT_ATTEMPTS
+        ):
+            child["status"] = CHILD_PLANNED
+            child["price"] = max(0.001, round(float(child.get("price") or 0.0) - 0.01, 6))
+            child["last_error"] = f"{error_text} (retry {attempts}/{_MAX_EXIT_SUBMIT_ATTEMPTS - 1})"
     return child
 
 

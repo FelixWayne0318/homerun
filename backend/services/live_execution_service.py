@@ -1202,7 +1202,13 @@ class LiveExecutionService:
                 )
                 return
 
-        if trades_checked and (open_orders_checked or not has_metadata):
+        # Only release when the view that can actually prove absence was read.
+        # A taker order (FOK/FAK/IOC) cannot rest, so trade history alone is
+        # conclusive. A GTC order may be resting invisibly, so it needs a
+        # successful open-order read — without a metadata key we cannot match
+        # it there, and must leave the budget held instead of guessing.
+        is_taker_order = order.order_type in {OrderType.FOK, OrderType.FAK, OrderType.IOC}
+        if trades_checked and (is_taker_order or open_orders_checked):
             # The relevant venue view was read and showed neither a resting
             # order nor a fill: release the budget so one lost acknowledgement
             # cannot freeze the robot forever.
