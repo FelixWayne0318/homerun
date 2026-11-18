@@ -23,7 +23,7 @@ import os
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Set
+from typing import Any, Callable, Coroutine, Dict, Iterable, List, Optional, Set
 
 from sqlalchemy import select
 
@@ -561,18 +561,29 @@ class PriceCache:
             return None
         return time.monotonic() - entry.updated_at
 
-    def touch_all(self) -> None:
-        """Refresh ``updated_at`` on every cached entry without changing prices.
+    def touch_all(self, token_ids: Optional[Iterable[str]] = None) -> None:
+        """Refresh ``updated_at`` without changing prices, for subscribed tokens only.
 
         Called when the WS connection is confirmed alive (heartbeat pong
-        received).  For quiet markets the order book doesn't change so no WS
-        messages arrive, but the cached price is still valid — it just hasn't
-        moved.  Touching resets the staleness timer so the execution gate
+        received).  For quiet subscribed markets the order book doesn't change
+        so no WS messages arrive, but the cached price is still valid — it just
+        hasn't moved.  Touching resets the staleness timer so the execution gate
         doesn't reject unchanged but still-accurate prices.
+
+        Entries outside ``token_ids`` are deliberately left untouched: a cached
+        book that is no longer subscribed is not "quiet", it is unmaintained,
+        and must age out so callers fall back to a REST read instead of acting
+        on a frozen price.
         """
         now_mono = time.monotonic()
-        for entry in self._entries.values():
-            entry.updated_at = now_mono
+        if token_ids is None:
+            for entry in self._entries.values():
+                entry.updated_at = now_mono
+            return
+        for token_id in token_ids:
+            entry = self._entries.get(str(token_id or "").strip())
+            if entry is not None:
+                entry.updated_at = now_mono
 
     def all_token_ids(self) -> List[str]:
         """Return a snapshot of all cached token IDs."""
@@ -1003,9 +1014,11 @@ class PolymarketWSFeed:
                     await asyncio.wait_for(pong, timeout=self._heartbeat_pong_timeout)
                     self.stats.last_latency_ms = (time.monotonic() - start) * 1000
                     consecutive_misses = 0
-                    # Connection confirmed alive — touch cached prices so quiet
-                    # markets don't go stale while the feed is healthy.
-                    self._cache.touch_all()
+                    # Connection confirmed alive — touch prices for tokens we are
+                    # actually subscribed to so quiet markets don't go stale.
+                    # Unsubscribed cache entries keep aging so they fall back to
+                    # REST instead of serving a frozen book.
+                    self._cache.touch_all(self._subscribed_assets)
                 except asyncio.TimeoutError:
                     consecutive_misses += 1
                     logger.warning(

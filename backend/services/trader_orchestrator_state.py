@@ -8587,10 +8587,20 @@ async def list_live_wallet_positions_for_trader(
         .all()
     )
     managed_by_token: dict[str, str] = {}
+    order_mark_by_token: dict[str, tuple[float, str]] = {}
     for row in active_live_rows:
         token_id = _wallet_position_token_key(_extract_order_token_id(row))
         if token_id and token_id not in managed_by_token:
             managed_by_token[token_id] = str(row.id)
+        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+        position_state = payload.get("position_state")
+        position_state = position_state if isinstance(position_state, dict) else {}
+        mark = safe_float(position_state.get("last_mark_price"))
+        if token_id and mark is not None and mark > 0.0:
+            order_mark_by_token[token_id] = (
+                float(mark),
+                str(position_state.get("last_marked_at") or ""),
+            )
 
     total_positions = 0
     open_positions = 0
@@ -8613,6 +8623,25 @@ async def list_live_wallet_positions_for_trader(
         )
         if normalized is None:
             continue
+
+        # The wallet mirror (LiveTradingPosition) is refreshed by the slow
+        # wallet sync, so its mark can lag the book by many minutes and show a
+        # phantom loss on a live position. When this token is managed by an
+        # open order, the exit-risk loop's mark (order payload position_state,
+        # refreshed every sweep) is the authoritative display price.
+        order_mark = order_mark_by_token.get(token_key)
+        if order_mark is not None:
+            mark_price, marked_at = order_mark
+            normalized["current_price"] = mark_price
+            size = safe_float(normalized.get("size"), 0.0) or 0.0
+            if size > 0.0:
+                normalized["current_value"] = mark_price * size
+                initial_value = normalized.get("initial_value")
+                if initial_value is not None:
+                    normalized["unrealized_pnl"] = normalized["current_value"] - float(initial_value)
+            normalized["mark_price"] = mark_price
+            normalized["mark_source"] = "order_position_state"
+            normalized["mark_updated_at"] = marked_at or None
 
         total_positions += 1
         counts_as_open = bool(normalized.get("counts_as_open", True))

@@ -5128,6 +5128,10 @@ class LiveExecutionService:
         # Calculate USD notional with Decimal to avoid float accumulation drift.
         size_usd = _to_decimal(normalized_price) * _to_decimal(normalized_size)
         reserved = False
+        # Set immediately before the signed order is handed to the venue.
+        # Initialized here so an exception raised by an earlier pre-submit gate
+        # cannot leave the outer handler reading an unbound local.
+        submit_attempted = False
 
         # Per-stage breakdown — every async step in this method updates a
         # bucket so the slow log at the end (and the structured payload
@@ -5250,10 +5254,6 @@ class LiveExecutionService:
             provider_market_order = provider_order_type in {OrderType.FAK.value, OrderType.FOK.value}
 
             transport_retries_used = 0
-            # Set immediately before the signed order is handed to the venue.
-            # An exception raised while this flag is True means the venue may
-            # have accepted the order and the response was lost.
-            submit_attempted = False
             max_transport_retries = 2
             max_attempts = 3 if side == OrderSide.SELL else 2
             for attempt in range(max_attempts + max_transport_retries):
