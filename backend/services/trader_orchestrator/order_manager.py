@@ -1441,7 +1441,10 @@ async def submit_execution_leg(
             shares=shares,
             notional_usd=0.0,
         )
-    _min_live_depth_usd = max(0.0, safe_float(params.get("min_live_depth_usd"), 50.0) or 0.0)
+    # Opt-in: the gate is enforced only for robots that set the parameter, so
+    # adding it here cannot silently suppress other live strategies whose books
+    # are legitimately thin (crypto 5-minute markets in particular).
+    _min_live_depth_usd = max(0.0, safe_float(params.get("min_live_depth_usd"), 0.0) or 0.0)
     if order_side == "BUY" and live_book_payload is not None and _min_live_depth_usd > 0:
         _depth_ceiling = float(max_execution_price or price or 0.0)
         _ask_depth_usd = _cumulative_ask_depth_usd(live_book_payload, max_price=_depth_ceiling)

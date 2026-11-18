@@ -1090,12 +1090,13 @@ class LiveExecutionService:
     async def _recheck_unknown_buy_outcome(self, order: Order, size_usd: Decimal) -> None:
         """Recheck a BUY whose submission acknowledgement was lost.
 
-        FOK never rests on the book, so the only remaining evidence of a
-        fill is the venue's trade history. Pull it for this asset from
-        just before submission and match on side, price and time. A match
-        resolves the order from venue truth; no match after the last
-        attempt releases the held budget so a single lost acknowledgement
-        cannot freeze the robot forever.
+        Two venue views are needed, because the two order families fail
+        differently: a GTC BUY that was accepted rests on the book (open
+        orders), a FOK BUY never rests (trade history). Resolve from either
+        view before releasing anything. Release only when the relevant view
+        was actually read and showed nothing; otherwise keep the budget and
+        flag the order for an operator, because a duplicate position is worse
+        than a frozen dollar.
         """
         from datetime import timedelta
 
@@ -1103,14 +1104,56 @@ class LiveExecutionService:
 
         delays = (60.0, 120.0, 300.0, 300.0, 300.0)
         after_ts = int((order.created_at - timedelta(seconds=90)).timestamp())
+        metadata_key = str(getattr(order, "_clob_metadata", "") or "").strip().lower()
+        has_metadata = bool(metadata_key) and metadata_key not in {"0x" + "0" * 64}
+        open_orders_checked = False
+        trades_checked = False
+
         for attempt, delay in enumerate(delays, 1):
             await asyncio.sleep(delay)
+
+            if has_metadata:
+                try:
+                    open_response = await self._run_client_io(
+                        self._client.get_open_orders,
+                        timeout=_CLOB_READ_TIMEOUT_SECONDS,
+                    )
+                    open_orders_checked = True
+                except Exception as exc:
+                    logger.warning(
+                        "Unknown BUY recheck could not read open orders",
+                        token_id=order.token_id,
+                        attempt=attempt,
+                        error=str(exc)[:160],
+                    )
+                    open_response = None
+                if open_response is not None:
+                    for server_order in self._extract_server_orders(open_response):
+                        snapshot = self._parse_provider_order_snapshot(server_order)
+                        if snapshot is None:
+                            continue
+                        if str(snapshot.get("metadata") or "").strip().lower() != metadata_key:
+                            continue
+                        order.clob_order_id = str(snapshot.get("clob_order_id") or "") or None
+                        order.status = OrderStatus.OPEN
+                        order.error_message = None
+                        order.updated_at = utcnow()
+                        await self._persist_orders([order])
+                        logger.warning(
+                            "Unknown BUY resolved from venue open orders",
+                            token_id=order.token_id,
+                            clob_order_id=order.clob_order_id,
+                            attempt=attempt,
+                        )
+                        return
+
             try:
                 trades = await self._run_client_io(
                     self._client.get_trades,
                     TradeParams(asset_id=order.token_id, after=after_ts),
                     timeout=_CLOB_READ_TIMEOUT_SECONDS,
                 )
+                trades_checked = True
             except Exception as exc:
                 logger.warning(
                     "Unknown BUY recheck could not read trade history",
@@ -1159,17 +1202,36 @@ class LiveExecutionService:
                 )
                 return
 
-        order.status = OrderStatus.FAILED
-        order.error_message = "unknown_buy_unverified: no matching venue trade after recheck window"
+        if trades_checked and (open_orders_checked or not has_metadata):
+            # The relevant venue view was read and showed neither a resting
+            # order nor a fill: release the budget so one lost acknowledgement
+            # cannot freeze the robot forever.
+            order.status = OrderStatus.FAILED
+            order.error_message = "unknown_buy_unverified: no resting order and no matching trade in recheck window"
+            order.updated_at = utcnow()
+            await self._release_reservation(
+                size_usd=size_usd,
+                side=OrderSide.BUY,
+                token_id=order.token_id,
+            )
+            await self._persist_orders([order])
+            logger.error(
+                "Unknown BUY unverified after recheck window; budget released for operator audit",
+                token_id=order.token_id,
+                order_id=order.id,
+                attempts=len(delays),
+            )
+            return
+
+        # Venue view could not be read reliably. Keep the budget held and make
+        # the operator-visible state explicit; a later reconcile cycle or a
+        # manual audit has to decide, not a guess.
+        order.status = OrderStatus.PENDING
+        order.error_message = "unknown_buy_unverified_needs_manual: venue view unreadable during recheck window"
         order.updated_at = utcnow()
-        await self._release_reservation(
-            size_usd=size_usd,
-            side=OrderSide.BUY,
-            token_id=order.token_id,
-        )
         await self._persist_orders([order])
         logger.error(
-            "Unknown BUY unverified after recheck window; budget released for operator audit",
+            "Unknown BUY left unresolved; venue view unreadable during recheck window",
             token_id=order.token_id,
             order_id=order.id,
             attempts=len(delays),
@@ -4978,6 +5040,10 @@ class LiveExecutionService:
                     metadata_excerpt=str(metadata)[:80],
                 )
                 return order
+
+        # Keep the venue discovery key on the Order so a lost acknowledgement
+        # can be resolved from open orders (GTC) or trade history (taker).
+        setattr(order, "_clob_metadata", normalized_metadata)
 
         # Calculate USD notional with Decimal to avoid float accumulation drift.
         size_usd = _to_decimal(normalized_price) * _to_decimal(normalized_size)
