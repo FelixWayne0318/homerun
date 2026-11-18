@@ -5005,8 +5005,15 @@ class LiveExecutionService:
                     _lock_wait_started = _time.monotonic()
                     async with self._get_client_io_lock():
                         _po_record("io_lock_wait", _lock_wait_started)
+                        # BUY market orders are denominated in USDC by the
+                        # SDK (``amount`` = collateral to spend), while this
+                        # method takes ``size`` in shares. Submitting a BUY
+                        # FOK as a market order would over-buy whenever the
+                        # fill price beats the limit price. Route BUY through
+                        # the share-denominated OrderArgs path and keep market
+                        # orders for SELL, where ``amount`` is already shares.
                         submit_attempted = True
-                        if provider_market_order:
+                        if provider_market_order and side != OrderSide.BUY:
                             market_amount = float(normalized_size)
                             if side == OrderSide.BUY:
                                 market_amount = float(max(0.0, submit_price) * max(0.0, normalized_size))
