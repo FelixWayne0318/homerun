@@ -14,6 +14,7 @@ over ``services/external_data/provider_import_service.py``.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -72,8 +73,16 @@ async def list_providers() -> dict[str, Any]:
       * render the provider's market browser tabs
       * surface a link to the docs / pricing page
     """
-    polybacktest_status = await _polybacktest_status()
-    telonex_status = await _telonex_status()
+    async def _bounded_status(probe, label: str) -> dict[str, Any]:
+        try:
+            return await asyncio.wait_for(probe, timeout=4.0)
+        except asyncio.TimeoutError:
+            return {"configured": False, "ok": False, "error": f"{label} status probe timed out"}
+        except Exception as exc:
+            return {"configured": False, "ok": False, "error": str(exc)}
+
+    polybacktest_status = await _bounded_status(_polybacktest_status(), "polybacktest")
+    telonex_status = await _bounded_status(_telonex_status(), "telonex")
     return {
         "providers": [
             {

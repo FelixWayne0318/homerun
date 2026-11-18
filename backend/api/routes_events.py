@@ -1117,7 +1117,7 @@ async def get_world_opportunities(
 async def get_instability_scores(
     country: Optional[str] = Query(None),
     min_score: float = Query(0.0),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=500),
     session: AsyncSession = Depends(get_db_session),
 ):
     """Get latest country instability index scores from DB."""
@@ -1127,7 +1127,7 @@ async def get_instability_scores(
     except Exception:
         min_score_value = 0.0
     try:
-        limit_value = max(1, min(200, int(limit)))
+        limit_value = max(1, min(500, int(limit)))
     except Exception:
         limit_value = 50
 

@@ -478,6 +478,7 @@ async def run_job(run_id: str) -> dict[str, Any]:
             row.strategy_name = exec_block.get("strategy_name") or row.strategy_name
             row.trade_count = int(exec_block.get("trade_count") or 0)
             row.total_return_pct = float(exec_block.get("total_return_pct") or 0.0)
+            row.snapshots_processed = int(exec_block.get("n_snapshots") or 0)
             row.message = (
                 f"Done · trades={row.trade_count} · "
                 f"return={row.total_return_pct:.2f}% · "

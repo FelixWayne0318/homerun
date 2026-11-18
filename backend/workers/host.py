@@ -1522,10 +1522,24 @@ class WorkerHost:
                 )
                 await self._restart_runtime_task(runtime_name, reason="stale_heartbeat")
 
-    async def _initialize_services(self) -> None:
-        logger.info("Worker plane database pool ready", plane=self._plane_name)
+    async def _initialize_runtime_settings_overrides(self) -> None:
+        startup_markers = (
+            "cannotconnectnowerror",
+            "the database system is starting up",
+            "the database system is not yet accepting connections",
+            "consistent recovery state has not been yet reached",
+        )
 
-        if self._enabled("apply_runtime_settings"):
+        def _is_startup_error(exc: BaseException) -> bool:
+            current: BaseException | None = exc
+            while current is not None:
+                message = str(current).lower()
+                if any(marker in message for marker in startup_markers):
+                    return True
+                current = current.__cause__ or current.__context__
+            return False
+
+        for attempt in range(1, 31):
             try:
                 await apply_runtime_settings_overrides()
                 logger.info(
@@ -1533,8 +1547,28 @@ class WorkerHost:
                     plane=self._plane_name,
                     precedence=RUNTIME_SETTINGS_PRECEDENCE,
                 )
+                return
             except Exception as exc:
-                logger.warning("Failed to apply runtime settings overrides", plane=self._plane_name, exc_info=exc)
+                if not _is_startup_error(exc) or attempt == 30:
+                    logger.warning(
+                        "Failed to apply runtime settings overrides",
+                        plane=self._plane_name,
+                        exc_info=exc,
+                    )
+                    return
+                logger.warning(
+                    "PostgreSQL is still recovering; retrying runtime settings overrides",
+                    plane=self._plane_name,
+                    attempt=attempt,
+                    total_attempts=30,
+                )
+                await asyncio.sleep(1.0)
+
+    async def _initialize_services(self) -> None:
+        logger.info("Worker plane database pool ready", plane=self._plane_name)
+
+        if self._enabled("apply_runtime_settings"):
+            await self._initialize_runtime_settings_overrides()
 
         # Bring up the Redis pool early so any subsequent service
         # initialization can opportunistically use the bus.  Soft-fail:

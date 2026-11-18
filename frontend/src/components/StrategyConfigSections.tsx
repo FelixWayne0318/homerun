@@ -139,11 +139,12 @@ function StrategyConfigCard({
 
   return (
     <Card className="bg-card/40 border-border/40 rounded-xl shadow-none overflow-hidden">
-      <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center justify-between px-3 py-2 hover:bg-muted/30 transition-colors"
-      >
-        <div className="flex items-center gap-1.5">
+      <div className="w-full flex items-center justify-between px-3 py-2 hover:bg-muted/30 transition-colors">
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+        >
           <Code2 className="w-3.5 h-3.5 text-violet-400" />
           <h4 className="text-[10px] uppercase tracking-widest font-semibold">
             {strategy.name}
@@ -173,7 +174,7 @@ function StrategyConfigCard({
               {saveMsg.text}
             </span>
           )}
-        </div>
+        </button>
         <div className="flex items-center gap-1.5">
           {!localEnabled && (
             <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-400">
@@ -193,13 +194,20 @@ function StrategyConfigCard({
             disabled={saveMutation.isPending}
             className="scale-75"
           />
-          {open ? (
-            <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
-          ) : (
-            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
-          )}
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            className="inline-flex items-center justify-center rounded p-0.5 hover:bg-muted/40"
+            aria-label={open ? 'Collapse strategy configuration' : 'Expand strategy configuration'}
+          >
+            {open ? (
+              <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+            ) : (
+              <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+            )}
+          </button>
         </div>
-      </button>
+      </div>
       {open && (
         <div className="px-3 pb-3 space-y-2.5">
           {strategy.description && (

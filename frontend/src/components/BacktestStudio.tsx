@@ -2092,6 +2092,7 @@ export default function BacktestStudio({
     queryKey: ['backtest', 'run-status', pendingRunId],
     queryFn: () => getBacktestRunStatus(pendingRunId!),
     enabled: !!pendingRunId,
+    refetchIntervalInBackground: true,
     // 1.5s while running; the engine writes progress at ~1s cadence
     // so this keeps the UI fresh without slamming the DB.
     refetchInterval: (q) => {

@@ -2265,7 +2265,16 @@ async def manual_buy(
         order_id = uuid.uuid4().hex
         side_str = str(pos.side or "BUY").strip().upper()
         size_shares = per_position_usd / pos.price if pos.price > 0 else 0.0
-        direction = f"buy_{pos.outcome.lower()}" if pos.outcome else f"buy_{side_str.lower()}"
+        outcome_label = str(pos.outcome or "").strip().lower()
+        outcome_side = (
+            "no"
+            if outcome_label == "no" or outcome_label.startswith("no ")
+            else "yes"
+        )
+        action_side = side_str.lower()
+        if action_side not in {"buy", "sell"}:
+            action_side = "buy"
+        direction = f"{action_side}_{outcome_side}"
 
         live_order_result = None
         order_status = "submitted"

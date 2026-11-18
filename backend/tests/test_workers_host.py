@@ -61,6 +61,49 @@ def test_should_not_suppress_arbitrary_runtime_error():
 
 
 @pytest.mark.asyncio
+async def test_runtime_settings_retry_after_postgres_startup_error(monkeypatch):
+    worker_host = host.WorkerHost("trading")
+    attempts = 0
+
+    async def fake_apply():
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise ValueError("the database system is starting up")
+
+    async def fake_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(host, "apply_runtime_settings_overrides", fake_apply)
+    monkeypatch.setattr(host.asyncio, "sleep", fake_sleep)
+
+    await worker_host._initialize_runtime_settings_overrides()
+
+    assert attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_runtime_settings_do_not_retry_non_startup_error(monkeypatch):
+    worker_host = host.WorkerHost("trading")
+    attempts = 0
+
+    async def fake_apply():
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("invalid settings payload")
+
+    async def fake_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(host, "apply_runtime_settings_overrides", fake_apply)
+    monkeypatch.setattr(host.asyncio, "sleep", fake_sleep)
+
+    await worker_host._initialize_runtime_settings_overrides()
+
+    assert attempts == 1
+
+
+@pytest.mark.asyncio
 async def test_initialize_services_schedules_live_execution_in_background(monkeypatch):
     worker_host = host.WorkerHost("all")
     worker_host._plane_config = {key: False for key in worker_host._plane_config}

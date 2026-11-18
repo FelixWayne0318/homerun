@@ -237,13 +237,44 @@ async def enqueue_run_route(req: UnifiedBacktestRequest) -> dict[str, Any]:
     """
     from services.backtest.job_runner import enqueue_run
 
+    token_ids = req.token_ids
+    start = req.start
+    end = req.end
+    if req.session_id:
+        from services.recording_session_service import session_backtest_scope
+
+        scope = await session_backtest_scope(req.session_id)
+        if scope is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Recording session '{req.session_id}' not found or has no captured data",
+            )
+        token_ids = scope["token_ids"]
+        start = scope["start"]
+        end = scope["end"]
+    elif req.provider_dataset_ids:
+        from services.external_data.provider_import_service import resolve_dataset_scope
+
+        scope = await resolve_dataset_scope(list(req.provider_dataset_ids))
+        if scope is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "None of the requested provider_dataset_ids resolved to "
+                    "an imported dataset. Import them via Data Lab → Providers first."
+                ),
+            )
+        token_ids = scope["token_ids"]
+        start = scope["start"]
+        end = scope["end"]
+
     payload: dict[str, Any] = {
         "source_code": req.source_code,
         "slug": req.slug,
         "config": req.config,
-        "token_ids": req.token_ids,
-        "start": req.start,
-        "end": req.end,
+        "token_ids": token_ids,
+        "start": start,
+        "end": end,
         "session_id": req.session_id,
         "provider_dataset_ids": req.provider_dataset_ids,
         "initial_capital_usd": req.initial_capital_usd,
