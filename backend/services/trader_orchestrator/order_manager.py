@@ -1445,7 +1445,31 @@ async def submit_execution_leg(
     # adding it here cannot silently suppress other live strategies whose books
     # are legitimately thin (crypto 5-minute markets in particular).
     _min_live_depth_usd = max(0.0, safe_float(params.get("min_live_depth_usd"), 0.0) or 0.0)
-    if order_side == "BUY" and live_book_payload is not None and _min_live_depth_usd > 0:
+    if order_side == "BUY" and _min_live_depth_usd > 0:
+        if live_book_payload is None:
+            # Fail closed: a robot that asked for a depth floor must not trade
+            # on a book we could not read, otherwise the gate is decorative
+            # exactly when the market is least transparent.
+            return LegSubmitResult(
+                leg_id=leg_id,
+                status="skipped",
+                effective_price=price,
+                error_message=(
+                    f"Live book unavailable; cannot verify min_live_depth_usd "
+                    f"{_min_live_depth_usd:.2f}."
+                ),
+                payload={
+                    "mode": "live",
+                    "submission": "rejected",
+                    "reason": "min_live_depth_unavailable",
+                    "min_live_depth_usd": float(_min_live_depth_usd),
+                    "token_id": token_id,
+                    "leg": dict(leg),
+                    "requested_notional_usd": notional,
+                },
+                shares=shares,
+                notional_usd=0.0,
+            )
         _depth_ceiling = float(max_execution_price or price or 0.0)
         _ask_depth_usd = _cumulative_ask_depth_usd(live_book_payload, max_price=_depth_ceiling)
         if _ask_depth_usd + 1e-9 < _min_live_depth_usd:

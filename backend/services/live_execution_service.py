@@ -74,6 +74,10 @@ PENDING_RECONCILIATION_MAX_ATTEMPTS = 6
 _ORDER_SUBMIT_TIMEOUT_SECONDS = 8.0
 _CLIENT_IO_TIMEOUT_SECONDS = 10.0
 _CLOB_READ_TIMEOUT_SECONDS = 3.0
+# How far back a restart may recover unresolved BUY submissions. Matches the
+# reference implementation's 24h give-up horizon: beyond that the operator
+# reconciles manually rather than the process inventing a fill state.
+_UNKNOWN_BUY_RECHECK_HORIZON_SECONDS = 86400.0
 _CLOB_READ_CIRCUIT_BREAKER_THRESHOLD = 3  # consecutive failures before opening
 _CLOB_READ_CIRCUIT_BREAKER_COOLDOWN = 30.0  # seconds to wait before retrying
 _CLOB_READ_FAILURE_LOG_INTERVAL = 30.0  # seconds between repeated failure logs
@@ -1107,45 +1111,78 @@ class LiveExecutionService:
         metadata_key = str(getattr(order, "_clob_metadata", "") or "").strip().lower()
         has_metadata = bool(metadata_key) and metadata_key not in {"0x" + "0" * 64}
         open_orders_checked = False
+        open_lookup_ambiguous = False
         trades_checked = False
 
         for attempt, delay in enumerate(delays, 1):
             await asyncio.sleep(delay)
 
-            if has_metadata:
-                try:
-                    open_response = await self._run_client_io(
-                        self._client.get_open_orders,
-                        timeout=_CLOB_READ_TIMEOUT_SECONDS,
-                    )
-                    open_orders_checked = True
-                except Exception as exc:
+            try:
+                open_response = await self._run_client_io(
+                    self._client.get_open_orders,
+                    timeout=_CLOB_READ_TIMEOUT_SECONDS,
+                )
+                open_orders_checked = True
+            except Exception as exc:
+                logger.warning(
+                    "Unknown BUY recheck could not read open orders",
+                    token_id=order.token_id,
+                    attempt=attempt,
+                    error=str(exc)[:160],
+                )
+                open_response = None
+
+            if open_response is not None:
+                matched_snapshot: Optional[dict[str, Any]] = None
+                fallback_candidates: list[dict[str, Any]] = []
+                for server_order in self._extract_server_orders(open_response):
+                    snapshot = self._parse_provider_order_snapshot(server_order)
+                    if snapshot is None:
+                        continue
+                    snapshot_meta = str(snapshot.get("metadata") or "").strip().lower()
+                    if has_metadata:
+                        if snapshot_meta == metadata_key:
+                            matched_snapshot = snapshot
+                            break
+                        continue
+                    # Without a persisted metadata key the row lost its venue
+                    # identifier across a restart. Accept only an exact, unique
+                    # (asset, side, price, size) match; anything ambiguous is
+                    # left for an operator instead of being adopted blind.
+                    raw = snapshot.get("raw") or {}
+                    asset = str(raw.get("asset_id") or raw.get("token_id") or "").strip()
+                    if asset != order.token_id:
+                        continue
+                    if str(raw.get("side") or "").strip().lower() != "buy":
+                        continue
+                    limit_price = snapshot.get("limit_price")
+                    size = snapshot.get("size")
+                    if limit_price is None or size is None:
+                        continue
+                    if abs(float(limit_price) - float(order.price)) > 1e-6:
+                        continue
+                    if abs(float(size) - float(order.size)) > 1e-6:
+                        continue
+                    fallback_candidates.append(snapshot)
+                if not has_metadata:
+                    if len(fallback_candidates) == 1:
+                        matched_snapshot = fallback_candidates[0]
+                    elif len(fallback_candidates) > 1:
+                        open_lookup_ambiguous = True
+                if matched_snapshot is not None:
+                    order.clob_order_id = str(matched_snapshot.get("clob_order_id") or "") or None
+                    order.status = OrderStatus.OPEN
+                    order.error_message = None
+                    order.updated_at = utcnow()
+                    await self._persist_orders([order])
                     logger.warning(
-                        "Unknown BUY recheck could not read open orders",
+                        "Unknown BUY resolved from venue open orders",
                         token_id=order.token_id,
+                        clob_order_id=order.clob_order_id,
+                        matched_by="metadata" if has_metadata else "asset_price_size",
                         attempt=attempt,
-                        error=str(exc)[:160],
                     )
-                    open_response = None
-                if open_response is not None:
-                    for server_order in self._extract_server_orders(open_response):
-                        snapshot = self._parse_provider_order_snapshot(server_order)
-                        if snapshot is None:
-                            continue
-                        if str(snapshot.get("metadata") or "").strip().lower() != metadata_key:
-                            continue
-                        order.clob_order_id = str(snapshot.get("clob_order_id") or "") or None
-                        order.status = OrderStatus.OPEN
-                        order.error_message = None
-                        order.updated_at = utcnow()
-                        await self._persist_orders([order])
-                        logger.warning(
-                            "Unknown BUY resolved from venue open orders",
-                            token_id=order.token_id,
-                            clob_order_id=order.clob_order_id,
-                            attempt=attempt,
-                        )
-                        return
+                    return
 
             try:
                 trades = await self._run_client_io(
@@ -1208,7 +1245,7 @@ class LiveExecutionService:
         # successful open-order read — without a metadata key we cannot match
         # it there, and must leave the budget held instead of guessing.
         is_taker_order = order.order_type in {OrderType.FOK, OrderType.FAK, OrderType.IOC}
-        if trades_checked and (is_taker_order or open_orders_checked):
+        if trades_checked and (is_taker_order or (open_orders_checked and not open_lookup_ambiguous)):
             # The relevant venue view was read and showed neither a resting
             # order nor a fill: release the budget so one lost acknowledgement
             # cannot freeze the robot forever.
@@ -3950,6 +3987,7 @@ class LiveExecutionService:
                         )
 
                         self._orders.clear()
+                        recovered_unknown_buys: list[Order] = []
                         orders_result = await session.execute(
                             select(LiveTradingOrder)
                             .where(LiveTradingOrder.wallet_address == wallet)
@@ -3993,6 +4031,18 @@ class LiveExecutionService:
                                 opportunity_id=row.opportunity_id,
                             )
                             self._remember_order(order)
+                            if (
+                                side == OrderSide.BUY
+                                and status == OrderStatus.PENDING
+                                and str(order.error_message or "").startswith("unknown_submit_outcome")
+                                and (utcnow() - order.created_at).total_seconds() <= _UNKNOWN_BUY_RECHECK_HORIZON_SECONDS
+                            ):
+                                recovered_unknown_buys.append(order)
+
+                        for recovered_order in recovered_unknown_buys:
+                            recovered_size_usd = _to_decimal(recovered_order.price * recovered_order.size)
+                            if recovered_size_usd > 0:
+                                self._schedule_unknown_buy_recheck(recovered_order, recovered_size_usd)
 
                         if runtime_row is not None:
                             self._stats.total_trades = int(runtime_row.total_trades or 0)
