@@ -2743,9 +2743,12 @@ def _resolve_shadow_account_id(control: dict[str, Any], trader: dict[str, Any]) 
     settings_payload = settings_payload if isinstance(settings_payload, dict) else {}
     metadata_payload = trader.get("metadata")
     metadata_payload = metadata_payload if isinstance(metadata_payload, dict) else {}
+    # Per-trader metadata wins so an isolated experiment account cannot
+    # silently inherit the global shadow ledger and mix its PnL with the
+    # production shadow trader.
     candidates = (
-        settings_payload.get("shadow_account_id"),
         metadata_payload.get("shadow_account_id"),
+        settings_payload.get("shadow_account_id"),
     )
     for candidate in candidates:
         account_id = str(candidate or "").strip()
