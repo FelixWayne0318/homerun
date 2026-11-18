@@ -497,6 +497,30 @@ class OrderStatus(str, Enum):
     FAILED = "failed"
 
 
+def _is_definitive_submit_rejection(error_text: str) -> bool:
+    """True when the venue rejected the payload before accepting it.
+
+    Polymarket answers validation failures with HTTP 400 and a JSON body such
+    as ``invalid amounts, the market buy orders maker amount supports a max
+    accuracy of 2 decimals``.  Those responses prove nothing was accepted, so
+    the caller must mark the order FAILED and release its reservation instead
+    of treating the text as an ambiguous submission.
+    """
+    text = str(error_text or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "status=400",
+            "status=422",
+            "invalid amounts",
+            "invalid order",
+            "invalid price",
+            "bad request",
+            "validation error",
+        )
+    )
+
+
 def _is_ambiguous_submit_response(error_text: str) -> bool:
     """True when a non-success response does not prove the order was rejected.
 
@@ -5246,18 +5270,26 @@ class LiveExecutionService:
                     _lock_wait_started = _time.monotonic()
                     async with self._get_client_io_lock():
                         _po_record("io_lock_wait", _lock_wait_started)
-                        # BUY market orders are denominated in USDC by the
-                        # SDK (``amount`` = collateral to spend), while this
-                        # method takes ``size`` in shares. Submitting a BUY
-                        # FOK as a market order would over-buy whenever the
-                        # fill price beats the limit price. Route BUY through
-                        # the share-denominated OrderArgs path and keep market
-                        # orders for SELL, where ``amount`` is already shares.
+                        # Market orders are denomination-specific at the venue:
+                        # BUY ``amount`` is USDC collateral, SELL ``amount`` is
+                        # shares.  BUY must spend a cent-rounded USDC figure
+                        # (maker amount 2-decimal limit); the SDK derives the
+                        # share quantity from it.
                         submit_attempted = True
-                        if provider_market_order and side != OrderSide.BUY:
-                            market_amount = float(normalized_size)
+                        if provider_market_order:
+                            # BUY market orders are denominated in USDC by the
+                            # SDK (``amount`` = collateral to spend), and the
+                            # CLOB validates the maker amount with a 2-decimal
+                            # precision limit.  Share-denominated OrderArgs
+                            # produced maker amounts such as 3.325 USDC and was
+                            # rejected with ``invalid amounts``.  Round the
+                            # spend to cents; the venue derives shares.
                             if side == OrderSide.BUY:
-                                market_amount = float(max(0.0, submit_price) * max(0.0, normalized_size))
+                                market_amount = round(
+                                    max(0.0, submit_price) * max(0.0, normalized_size), 2
+                                )
+                            else:
+                                market_amount = float(normalized_size)
                             market_order_kwargs = dict(
                                 token_id=token_key,
                                 amount=market_amount,
@@ -5800,7 +5832,12 @@ class LiveExecutionService:
             # and let the next signal stack a second position on top of a fill
             # we cannot see. Hold the budget and mark the order unresolved
             # until reconciliation converges on venue truth.
-            unknown_buy_outcome = submit_attempted and side == OrderSide.BUY and not auth_failure
+            unknown_buy_outcome = (
+                submit_attempted
+                and side == OrderSide.BUY
+                and not auth_failure
+                and not _is_definitive_submit_rejection(str(e))
+            )
             if unknown_buy_outcome:
                 order.status = OrderStatus.PENDING
                 order.error_message = f"unknown_submit_outcome: {e}"
