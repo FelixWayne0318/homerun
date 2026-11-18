@@ -4985,6 +4985,10 @@ class LiveExecutionService:
             provider_market_order = provider_order_type in {OrderType.FAK.value, OrderType.FOK.value}
 
             transport_retries_used = 0
+            # Set immediately before the signed order is handed to the venue.
+            # An exception raised while this flag is True means the venue may
+            # have accepted the order and the response was lost.
+            submit_attempted = False
             max_transport_retries = 2
             max_attempts = 3 if side == OrderSide.SELL else 2
             for attempt in range(max_attempts + max_transport_retries):
@@ -5001,6 +5005,7 @@ class LiveExecutionService:
                     _lock_wait_started = _time.monotonic()
                     async with self._get_client_io_lock():
                         _po_record("io_lock_wait", _lock_wait_started)
+                        submit_attempted = True
                         if provider_market_order:
                             market_amount = float(normalized_size)
                             if side == OrderSide.BUY:
@@ -5529,24 +5534,43 @@ class LiveExecutionService:
                 reserved = False
             raise
         except Exception as e:
-            order.status = OrderStatus.FAILED
-            order.error_message = str(e)
-            if _is_auth_failure_text(e):
+            auth_failure = _is_auth_failure_text(e)
+            if auth_failure:
                 self._trip_auth_circuit(e)
-            if reserved:
-                await self._release_reservation(
-                    size_usd=size_usd,
-                    side=side,
+            # A BUY whose signed payload already crossed the venue boundary is
+            # NOT a failure when the response is lost: the CLOB may have
+            # filled it. Recording FAILED here would release the risk budget
+            # and let the next signal stack a second position on top of a fill
+            # we cannot see. Hold the budget and mark the order unresolved
+            # until reconciliation converges on venue truth.
+            unknown_buy_outcome = submit_attempted and side == OrderSide.BUY and not auth_failure
+            if unknown_buy_outcome:
+                order.status = OrderStatus.PENDING
+                order.error_message = f"unknown_submit_outcome: {e}"
+                logger.error(
+                    "BUY submission outcome unknown; holding reservation for reconciliation",
                     token_id=token_key,
+                    order_type=normalized_order_type.value,
+                    error_type=type(e).__name__,
+                    error=str(e)[:200],
                 )
-                reserved = False
-            error_str = str(e).lower()
-            if "no orders found to match" in error_str or "fak" in error_str:
-                logger.info(f"Order execution no-fill (FAK/FOK no liquidity): {e}")
-            elif _is_auth_failure_text(e):
-                logger.error("Order execution rejected by Polymarket authentication; live submissions circuit-opened")
             else:
-                logger.error(f"Order execution error: {e}")
+                order.status = OrderStatus.FAILED
+                order.error_message = str(e)
+                if reserved:
+                    await self._release_reservation(
+                        size_usd=size_usd,
+                        side=side,
+                        token_id=token_key,
+                    )
+                    reserved = False
+                error_str = str(e).lower()
+                if "no orders found to match" in error_str or "fak" in error_str:
+                    logger.info(f"Order execution no-fill (FAK/FOK no liquidity): {e}")
+                elif auth_failure:
+                    logger.error("Order execution rejected by Polymarket authentication; live submissions circuit-opened")
+                else:
+                    logger.error(f"Order execution error: {e}")
 
         order.updated_at = utcnow()
         self._remember_order(order)

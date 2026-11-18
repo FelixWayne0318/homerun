@@ -1077,9 +1077,18 @@ async def submit_execution_leg(
             )
         skip_buy_pre_submit_gate = True
 
-    time_in_force = str(leg.get("time_in_force") or "GTC").strip().upper()
-    post_only = bool(leg.get("post_only", False))
     params = dict(strategy_params or {})
+    # Live copy-trading must not rest on the book: a GTC limit outlives the
+    # signal it was derived from and keeps a position slot occupied while the
+    # price moves away. ``live_time_in_force`` lets a robot opt into a
+    # taker order (FOK) without touching the shadow simulator's maker policy
+    # or any other strategy's leg.
+    live_time_in_force = str(params.get("live_time_in_force") or "").strip().upper()
+    if mode_key == "live" and live_time_in_force and not leg.get("time_in_force"):
+        time_in_force = live_time_in_force
+    else:
+        time_in_force = str(leg.get("time_in_force") or "GTC").strip().upper()
+    post_only = bool(leg.get("post_only", False))
     allow_taker_limit_buy_above_signal = _resolve_leg_execution_bool(
         leg=leg,
         key="allow_taker_limit_buy_above_signal",
