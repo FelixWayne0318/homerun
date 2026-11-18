@@ -52,7 +52,7 @@ logger = get_logger(__name__)
 
 ZERO = Decimal("0")
 USDC_BASE_UNITS = Decimal("1000000")
-POLYMARKET_SIGNATURE_TYPES = (0, 1, 2)
+POLYMARKET_SIGNATURE_TYPES = (0, 1, 2, 3)
 POST_ONLY_REPRICE_TICK = 0.01
 INITIALIZATION_RETRY_BACKOFF_SECONDS = 60.0
 MISSING_DEPENDENCY_RELOG_SECONDS = 300.0
@@ -1136,7 +1136,7 @@ class LiveExecutionService:
     def _funder_for_signature_type(self, signature_type: int) -> Optional[str]:
         if signature_type == 0:
             return self._eoa_address or self._wallet_address
-        if signature_type in (1, 2):
+        if signature_type in (1, 2, 3):
             return self._proxy_funder_address
         return None
 
@@ -1148,7 +1148,7 @@ class LiveExecutionService:
             return
         if not isinstance(signature_type, int):
             return
-        if not (0 <= signature_type <= 2):
+        if not (0 <= signature_type <= 3):
             return
         if self._client is None:
             return
@@ -2569,7 +2569,7 @@ class LiveExecutionService:
                     eoa_address,
                     sig_type,
                 )
-                if sig_type in (1, 2):
+                if sig_type in (1, 2, 3):
                     self._proxy_funder_address = funder
                     if funder:
                         logger.info(

@@ -424,8 +424,8 @@ class Settings(BaseSettings):
     POLYGON_RPC_URL: str = "https://rpc-mainnet.matic.quiknode.pro"
     POLYGON_WS_URL: str = "wss://polygon-bor-rpc.publicnode.com"
     CHAIN_ID: int = 137  # Polygon mainnet
-    POLYMARKET_SIGNATURE_TYPE: int = 1  # 0=EOA, 1=POLY_PROXY, 2=POLY_GNOSIS_SAFE
-    POLYMARKET_FUNDER: Optional[str] = None  # Proxy wallet that holds funds for signature types 1/2
+    POLYMARKET_SIGNATURE_TYPE: int = 1  # 0=EOA, 1=POLY_PROXY, 2=POLY_GNOSIS_SAFE, 3=POLY_1271 deposit wallet
+    POLYMARKET_FUNDER: Optional[str] = None  # Proxy/deposit wallet that holds funds for signature types 1/2/3
     # Builder code (bytes32 hex) for builder fee attribution on V2 orders.
     # Copy from polymarket.com Settings → Builder. Leave None to opt out.
     POLYMARKET_BUILDER_CODE: Optional[str] = None
