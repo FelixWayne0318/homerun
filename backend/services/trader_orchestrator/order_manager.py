@@ -489,6 +489,30 @@ def _check_slippage_bps(
     return (drift_bps > cap), drift_bps, cap
 
 
+def _cumulative_ask_depth_usd(
+    book_payload: dict[str, Any] | None,
+    *,
+    max_price: float,
+) -> float:
+    """USD size available on the ask side at or below ``max_price``.
+
+    Sums every level inside the price band instead of reading the top of
+    book: a market can quote a tight spread and still have almost nothing
+    behind it, which is exactly the fill the live path used to walk into.
+    """
+    asks = (book_payload or {}).get("asks") or []
+    total = 0.0
+    for level in asks:
+        price = safe_float(level.get("price") if isinstance(level, dict) else getattr(level, "price", None))
+        size = safe_float(level.get("size") if isinstance(level, dict) else getattr(level, "size", None))
+        if price is None or size is None or price <= 0 or size <= 0:
+            continue
+        if price > max_price + 1e-9:
+            continue
+        total += price * size
+    return total
+
+
 def _check_max_spread_bps(
     *,
     book_payload: dict[str, Any] | None,
@@ -1417,6 +1441,34 @@ async def submit_execution_leg(
             shares=shares,
             notional_usd=0.0,
         )
+    _min_live_depth_usd = max(0.0, safe_float(params.get("min_live_depth_usd"), 50.0) or 0.0)
+    if order_side == "BUY" and live_book_payload is not None and _min_live_depth_usd > 0:
+        _depth_ceiling = float(max_execution_price or price or 0.0)
+        _ask_depth_usd = _cumulative_ask_depth_usd(live_book_payload, max_price=_depth_ceiling)
+        if _ask_depth_usd + 1e-9 < _min_live_depth_usd:
+            return LegSubmitResult(
+                leg_id=leg_id,
+                status="skipped",
+                effective_price=price,
+                error_message=(
+                    f"Cumulative ask depth {_ask_depth_usd:.2f} USD below min_live_depth_usd "
+                    f"{_min_live_depth_usd:.2f} within price band <= {_depth_ceiling:.3f}."
+                ),
+                payload={
+                    "mode": "live",
+                    "submission": "rejected",
+                    "reason": "min_live_depth",
+                    "ask_depth_usd": round(float(_ask_depth_usd), 2),
+                    "min_live_depth_usd": float(_min_live_depth_usd),
+                    "price_ceiling": float(_depth_ceiling),
+                    "token_id": token_id,
+                    "leg": dict(leg),
+                    "requested_notional_usd": notional,
+                },
+                shares=shares,
+                notional_usd=0.0,
+            )
+
     live_latency = measured_latency_cached()
     live_survival_features = build_survival_features(
         estimate=None,

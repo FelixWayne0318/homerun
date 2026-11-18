@@ -838,7 +838,12 @@ async def submit_child_order(
             fallback_price=float(child["price"]),
             min_order_size_usd=float(min_order_size_usd),
             market_question=market_question,
-            time_in_force=str(child.get("tif") or "GTC"),
+            # Exits must not rest on the book: a GTC sell outlives the exit
+            # decision, and the position stays exposed while the price moves
+            # away. FAK takes what is available now and leaves the remainder
+            # for the next escalation pass (the venue side is share-denominated
+            # for SELL, so a partial fill is exact).
+            time_in_force=str(child.get("tif") or ("FAK" if str(side).strip().upper() == "SELL" else "GTC")),
             post_only=bool(child.get("post_only", False)),
             resolve_live_price=False,
             enforce_fallback_bound=True,

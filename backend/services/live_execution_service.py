@@ -493,6 +493,29 @@ class OrderStatus(str, Enum):
     FAILED = "failed"
 
 
+def _is_ambiguous_submit_response(error_text: str) -> bool:
+    """True when a non-success response does not prove the order was rejected.
+
+    Polymarket answers a keep-or-kill with ``killed`` after it may already
+    have taken liquidity, and gateway-side ``timeout`` / ``unknown`` replies
+    are equally non-committal. Only these texts qualify: a validation error
+    ("invalid price", "not enough balance") is a definitive rejection and
+    must keep the FAILED + release-budget semantics.
+    """
+    text = str(error_text or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "killed",
+            "timeout",
+            "timed out",
+            "unknown error",
+            "temporarily unavailable",
+            "service unavailable",
+        )
+    )
+
+
 def _normalize_order_type(value: Any) -> OrderType:
     raw = str(getattr(value, "value", value) or "").strip().upper()
     if raw == "FAK":
@@ -1055,6 +1078,102 @@ class LiveExecutionService:
         if index is not None:
             self._pending_reconciliations.pop(index)
             await self._persist_runtime_state_now()
+
+    def _schedule_unknown_buy_recheck(self, order: Order, size_usd: Decimal) -> None:
+        self._start_background_task(
+            self._recheck_unknown_buy_outcome(order, size_usd),
+            name=f"unknown-buy-recheck-{order.id[:12]}",
+            registry=self._reconciliation_tasks,
+            registry_key=f"unknown-buy-{order.id}",
+        )
+
+    async def _recheck_unknown_buy_outcome(self, order: Order, size_usd: Decimal) -> None:
+        """Recheck a BUY whose submission acknowledgement was lost.
+
+        FOK never rests on the book, so the only remaining evidence of a
+        fill is the venue's trade history. Pull it for this asset from
+        just before submission and match on side, price and time. A match
+        resolves the order from venue truth; no match after the last
+        attempt releases the held budget so a single lost acknowledgement
+        cannot freeze the robot forever.
+        """
+        from datetime import timedelta
+
+        from py_clob_client_v2.clob_types import TradeParams
+
+        delays = (60.0, 120.0, 300.0, 300.0, 300.0)
+        after_ts = int((order.created_at - timedelta(seconds=90)).timestamp())
+        for attempt, delay in enumerate(delays, 1):
+            await asyncio.sleep(delay)
+            try:
+                trades = await self._run_client_io(
+                    self._client.get_trades,
+                    TradeParams(asset_id=order.token_id, after=after_ts),
+                    timeout=_CLOB_READ_TIMEOUT_SECONDS,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Unknown BUY recheck could not read trade history",
+                    token_id=order.token_id,
+                    attempt=attempt,
+                    error=str(exc)[:160],
+                )
+                continue
+
+            filled_size = 0.0
+            filled_cost = 0.0
+            for row in trades or []:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("side") or "").strip().lower() != "buy":
+                    continue
+                try:
+                    price = float(row.get("price"))
+                    size = float(row.get("size"))
+                except (TypeError, ValueError):
+                    continue
+                if price <= 0 or size <= 0:
+                    continue
+                if price > order.price + 1e-9:
+                    continue
+                filled_size += size
+                filled_cost += price * size
+
+            if filled_size > 0:
+                order.status = (
+                    OrderStatus.FILLED
+                    if filled_size + 1e-9 >= order.size
+                    else OrderStatus.PARTIALLY_FILLED
+                )
+                order.filled_size = min(filled_size, order.size)
+                order.average_fill_price = filled_cost / filled_size
+                order.error_message = None
+                order.updated_at = utcnow()
+                await self._persist_orders([order])
+                logger.warning(
+                    "Unknown BUY resolved from venue trade history",
+                    token_id=order.token_id,
+                    filled_size=order.filled_size,
+                    average_fill_price=order.average_fill_price,
+                    attempt=attempt,
+                )
+                return
+
+        order.status = OrderStatus.FAILED
+        order.error_message = "unknown_buy_unverified: no matching venue trade after recheck window"
+        order.updated_at = utcnow()
+        await self._release_reservation(
+            size_usd=size_usd,
+            side=OrderSide.BUY,
+            token_id=order.token_id,
+        )
+        await self._persist_orders([order])
+        logger.error(
+            "Unknown BUY unverified after recheck window; budget released for operator audit",
+            token_id=order.token_id,
+            order_id=order.id,
+            attempts=len(delays),
+        )
 
     async def _enqueue_pending_reconciliation(self, orders: list[Order]) -> None:
         serialized_orders = [
@@ -5513,8 +5632,17 @@ class LiveExecutionService:
                         await asyncio.sleep(0)
                         continue
 
+                if side == OrderSide.BUY and _is_ambiguous_submit_response(error_message):
+                    order.status = OrderStatus.PENDING
+                    order.error_message = f"unknown_submit_outcome: {error_message}"
+                    self._schedule_unknown_buy_recheck(order, size_usd)
+                    logger.error(
+                        "BUY response ambiguous; holding reservation for recheck",
+                        token_id=token_key,
+                        error=error_message[:200],
+                    )
+                    break
                 order.status = OrderStatus.FAILED
-                order.error_message = error_message
                 await self._release_reservation(
                     size_usd=size_usd,
                     side=side,
@@ -5554,6 +5682,7 @@ class LiveExecutionService:
             if unknown_buy_outcome:
                 order.status = OrderStatus.PENDING
                 order.error_message = f"unknown_submit_outcome: {e}"
+                self._schedule_unknown_buy_recheck(order, size_usd)
                 logger.error(
                     "BUY submission outcome unknown; holding reservation for reconciliation",
                     token_id=token_key,
